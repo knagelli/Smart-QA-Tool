@@ -1,0 +1,95 @@
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+/* Palette inspired by a warm cream + deep green editorial aesthetic:
+   cream ground, forest-green ink, sage/terracotta accents, soft organic
+   shapes - adapted for a professional SaaS tool rather than a lifestyle
+   page, so it stays crisp and legible rather than purely decorative. */
+:root{--navy:#2B3A2A;--blue:#5B7A52;--sky:#E9EFE3;--border:#E6DFCF;--text:#2B2B25;
+  --muted:#7A7462;--bg:#FBF7ED;--red:#A13D2B;--rbg:#F6E3DA;
+  --purple:#B5652E;--pbg:#F3E4D3;--cream-card:#FFFFFF}
+html{-webkit-font-smoothing:antialiased}
+body{font-family:'Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  background:var(--bg);color:var(--text);font-size:15px;line-height:1.6}
+.wrap{max-width:640px;margin:0 auto;padding:56px 20px 80px;position:relative}
+.hdr{padding:0 4px;margin-bottom:36px;position:relative}
+.hdr h1{font-family:'Fraunces',Georgia,serif;font-size:30px;font-weight:700;color:var(--navy);letter-spacing:-.01em}
+.hdr .tagline{color:var(--blue);font-size:12.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;margin-top:8px}
+.hdr .sub{color:var(--muted);font-size:14px;margin-top:10px;max-width:46ch}
+.alert{background:var(--rbg);color:var(--red);border-radius:12px;padding:14px 18px;margin-bottom:20px;font-size:14px}
+.card{background:var(--cream-card);border:1px solid var(--border);border-radius:18px;padding:28px}
+.form label{display:block;font-size:13px;font-weight:600;color:var(--muted);margin-bottom:18px}
+.form input[type=text],.form input[type=password],.form input[type=file]{
+  display:block;width:100%;margin-top:6px;padding:11px 14px;border:1px solid var(--border);
+  border-radius:10px;font-size:14px;font-family:inherit;background:#fff}
+.form input:focus,.form textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
+.form .hint{display:block;font-weight:400;font-size:12px;color:var(--muted);margin-top:4px}
+button,.btn{display:inline-block;background:var(--navy);color:#fff;border:none;padding:13px 26px;
+  border-radius:999px;font-size:14px;font-weight:600;cursor:pointer;text-decoration:none;text-align:center;
+  transition:opacity .15s,transform .15s}
+button:hover,.btn:hover{opacity:.88}
+button:active,.btn:active{transform:scale(.98)}
+.btn.secondary{background:#fff;color:var(--navy);border:1px solid var(--navy)}
+.footnote{margin-top:18px;font-size:13px;color:var(--muted);text-align:center}
+.footnote a{color:var(--blue)}
+.sc{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px}
+.card.stat{text-align:center;padding:20px 10px}
+.card.stat .n{font-family:'Fraunces',Georgia,serif;font-size:30px;font-weight:700;color:var(--navy)}
+.card.stat .l{font-size:12px;color:var(--muted);margin-top:4px}
+.card.downloads{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+
+/* Option A/B chooser + Custom Application Mode (wider wrap for the extra fields) */
+.wrap-wide{max-width:760px}
+
+/* Soft organic backdrop shape behind the header - a nod to the photographic/
+   editorial reference without needing an actual photo. Purely decorative,
+   sits behind everything, never intercepts clicks. */
+.wrap-wide::before{content:"";position:absolute;top:-40px;right:-60px;width:280px;height:280px;
+  background:radial-gradient(circle,var(--sky) 0%,rgba(233,239,227,0) 70%);
+  border-radius:50%;z-index:-1;pointer-events:none}
+
+/* Step 1: plain-language "which describes your app" choice - two elevated
+   cards, nothing else on screen, so there's nothing to misread before deciding. */
+.chooser-intro{font-family:'Fraunces',Georgia,serif;font-size:19px;font-weight:600;
+  color:var(--navy);margin-bottom:20px;text-align:center}
+.choice-cards{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:22px}
+@media (max-width:560px){.choice-cards{grid-template-columns:1fr}}
+
+.choice-card{background:var(--cream-card);border:1px solid var(--border);border-radius:20px;padding:30px 22px;
+  text-align:center;cursor:pointer;display:flex;flex-direction:column;align-items:center;
+  font-family:inherit;box-shadow:0 1px 3px rgba(43,58,42,.05);
+  transition:transform .15s ease,box-shadow .15s ease,border-color .15s ease}
+.choice-card:hover{transform:translateY(-3px);border-color:var(--blue);
+  box-shadow:0 14px 30px rgba(43,58,42,.13)}
+.choice-card:active{transform:translateY(-1px)}
+
+.choice-icon-badge{width:52px;height:52px;border-radius:50%;display:flex;align-items:center;
+  justify-content:center;font-size:22px;margin-bottom:16px;background:var(--sky)}
+.choice-card.accent-purple .choice-icon-badge{background:var(--pbg)}
+
+.choice-title{font-family:'Fraunces',Georgia,serif;font-size:17px;font-weight:600;color:var(--navy);
+  margin-bottom:6px;line-height:1.35}
+.choice-sub{font-size:12.5px;color:var(--muted);margin-bottom:16px;line-height:1.5;font-weight:400}
+.choice-detail{font-size:13px;font-weight:400;color:var(--text);line-height:1.55;padding-top:14px;
+  border-top:1px solid var(--border);width:100%}
+
+.chooser-help{font-size:12.5px;color:var(--muted);text-align:center;line-height:1.7;
+  max-width:52ch;margin:0 auto}
+
+.back-link{background:none;border:none;color:var(--blue);font-size:13px;font-weight:600;
+  cursor:pointer;padding:0;margin-bottom:18px;font-family:inherit;display:flex;align-items:center;gap:4px}
+.back-link:hover{text-decoration:underline}
+.mode-desc{font-size:13.5px;color:var(--muted);margin-bottom:20px;line-height:1.6;
+  background:var(--sky);border-radius:14px;padding:14px 16px}
+.mode-pill{display:inline-block;margin-top:8px;font-size:11px;font-weight:600;background:var(--sky);
+  color:var(--blue);padding:3px 10px;border-radius:20px}
+.form textarea{display:block;width:100%;margin-top:6px;padding:11px 14px;border:1px solid var(--border);
+  border-radius:10px;font-size:14px;font-family:inherit;resize:vertical;background:#fff}
+.form .opt{font-weight:400;color:var(--muted)}
+.form label.inline-check{display:flex;align-items:center;gap:8px;font-weight:600}
+.form label.inline-check input{margin:0}
+.alert-info{background:var(--sky);color:var(--blue)}
+.alert-warn{background:#F6ECD6;color:#8A5A1E}
+.step-card{border:1px solid var(--border);border-radius:14px;padding:16px 18px;margin-bottom:16px;background:#FDFBF4}
+.step-card-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.step-card-hdr .step-id{font-family:monospace;font-size:12px;color:var(--blue);font-weight:700}
+.keep-toggle{display:flex;align-items:center;gap:6px;font-weight:600;margin-bottom:0}
+.keep-toggle input{margin:0}
