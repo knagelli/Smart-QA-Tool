@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Req2QA — Requirements to Test Coverage</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="wrap wrap-wide">
+  <header class="hdr">
+    <h1>Req2QA</h1>
+    <p class="tagline">Requirements to Test Coverage</p>
+    <p class="sub">Requirement validation, test scenario generation &amp; traceability matrix.</p>
+  </header>
+
+  {% if error %}
+  <div class="alert">{{ error }}</div>
+  {% endif %}
+
+  <!-- Step 1: plain-language choice. Nothing else is shown until one is picked,
+       so a non-technical user who was just told "use the custom option" sees
+       only two clearly-worded options and nothing to get lost in. -->
+  <div id="chooser">
+    <p class="chooser-intro">First, which best describes the application being tested?</p>
+    <div class="choice-cards">
+      <button type="button" class="choice-card" data-choose="named">
+        <span class="choice-icon">☁</span>
+        <span class="choice-title">An off-the-shelf online system</span>
+        <span class="choice-sub">e.g. Salesforce, Humanforce, SuccessFactors, Workday</span>
+        <span class="choice-detail">Fastest option — just upload your requirements document. No diagrams needed.</span>
+      </button>
+      <button type="button" class="choice-card" data-choose="custom">
+        <span class="choice-icon">⚙</span>
+        <span class="choice-title">A custom app built for us</span>
+        <span class="choice-sub">An in-house or bespoke system, not an off-the-shelf product</span>
+        <span class="choice-detail">A fuller setup — you'll also provide a process-flow diagram and a short brief.</span>
+      </button>
+    </div>
+    <p class="chooser-help">Not sure which one? Check with whoever asked you to run this, or use the off-the-shelf option if the application has its own public website you log into.</p>
+  </div>
+
+  <!-- Step 2a: off-the-shelf / named-platform form -->
+  <div class="tab-panel" id="tab-named" hidden>
+    <button type="button" class="back-link" data-back>&larr; Choose a different option</button>
+    <p class="mode-desc">
+      Claude uses its general knowledge of well-known platforms to judge each requirement.
+    </p>
+    <form class="card form" action="/analyze" method="post" enctype="multipart/form-data">
+      <label>Access code
+        <input type="password" name="access_code" required placeholder="Provided by your account manager">
+      </label>
+
+      <label>Application under test
+        <input type="text" name="application" required placeholder="e.g. Salesforce Sales Cloud, Humanforce, SuccessFactors">
+      </label>
+
+      <label>Requirements document
+        <input type="file" name="requirements_file" required accept=".docx,.xlsx,.xlsm,.pdf,.txt,.csv">
+        <span class="hint">.docx, .xlsx/.xlsm, .pdf, .txt or .csv</span>
+      </label>
+
+      <label>Baseline / version label <span class="opt">(optional)</span>
+        <input type="text" name="baseline_version" placeholder="e.g. v1, Sprint 4 UAT">
+        <span class="hint">Stamped onto this run's report so a later re-run is distinguishable.</span>
+      </label>
+
+      <button type="submit">Run Validation &amp; Generate Test Scenarios</button>
+    </form>
+    <p class="footnote">Processing usually takes 20&ndash;60 seconds depending on document size.</p>
+  </div>
+
+  <!-- Step 2b: custom application form -->
+  <div class="tab-panel" id="tab-custom" hidden>
+    <button type="button" class="back-link" data-back>&larr; Choose a different option</button>
+    <p class="mode-desc">
+      Since this app is custom-built, Claude reads your process flow and brief instead of
+      relying on prior platform knowledge. You'll review the extracted flow before anything
+      is generated. Web apps only (not native mobile or desktop apps).
+    </p>
+    <form class="card form" action="/analyze-custom" method="post" enctype="multipart/form-data">
+      <label>Access code
+        <input type="password" name="access_code" required placeholder="Provided by your account manager">
+      </label>
+
+      <label>Application name
+        <input type="text" name="application" required placeholder="e.g. Acme Internal Claims Portal">
+      </label>
+
+      <label>Project brief
+        <input type="file" name="brief_file" required accept=".docx,.xlsx,.xlsm,.pdf,.txt,.csv">
+        <span class="hint">Short context document — what the app does, who uses it.</span>
+      </label>
+
+      <label>Future-state process-flow diagram(s)
+        <input type="file" name="diagram_files" required multiple accept=".png,.jpg,.jpeg,.webp,.pdf">
+        <span class="hint">Visio/draw.io/BPMN export or a clear photo, as image(s) or PDF. You can select multiple pages/files.</span>
+      </label>
+
+      <label>Approved requirements document
+        <input type="file" name="requirements_file" required accept=".docx,.xlsx,.xlsm,.pdf,.txt,.csv">
+        <span class="hint">Already signed off — this run checks consistency/testability, not appropriateness.</span>
+      </label>
+
+      <label>Known element selectors / test-IDs <span class="opt">(optional)</span>
+        <textarea name="element_hints" rows="3" placeholder="e.g. #login-submit, [data-testid=approve-btn] on the Approval screen"></textarea>
+        <span class="hint">Improves execution reliability on critical screens if your developers have these. Never required.</span>
+      </label>
+
+      <label>Baseline / version label <span class="opt">(optional)</span>
+        <input type="text" name="baseline_version" placeholder="e.g. v1, Sprint 4 UAT">
+        <span class="hint">Stamped onto this run's report so a later re-run against an updated flow is distinguishable.</span>
+      </label>
+
+      <button type="submit">Parse Flow &amp; Review</button>
+    </form>
+    <p class="footnote">Next step: you'll confirm or correct the extracted process flow before any test cases are generated.</p>
+  </div>
+</div>
+<script>
+(function(){
+  var chooser = document.getElementById('chooser');
+  var panels = {named: document.getElementById('tab-named'), custom: document.getElementById('tab-custom')};
+
+  function showPanel(name){
+    chooser.hidden = true;
+    Object.keys(panels).forEach(function(k){ panels[k].hidden = (k !== name); });
+    window.scrollTo(0, 0);
+  }
+  function showChooser(){
+    chooser.hidden = false;
+    Object.keys(panels).forEach(function(k){ panels[k].hidden = true; });
+  }
+
+  document.querySelectorAll('[data-choose]').forEach(function(btn){
+    btn.addEventListener('click', function(){ showPanel(btn.dataset.choose); });
+  });
+  document.querySelectorAll('[data-back]').forEach(function(btn){
+    btn.addEventListener('click', showChooser);
+  });
+
+  var initial = "{{ active_tab or '' }}";
+  if (initial === 'named' || initial === 'custom') { showPanel(initial); }
+})();
+</script>
+</body>
+</html>
