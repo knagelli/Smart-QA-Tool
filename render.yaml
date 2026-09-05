@@ -10,4 +10,6 @@ services:
         sync: false
       - key: CLIENT_ACCESS_CODES
         sync: false
+      - key: PYTHON_VERSION
+        value: 3.11.9
     healthCheckPath: /healthz
