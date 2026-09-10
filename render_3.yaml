@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: smart-qa-tool
+    runtime: python
+    # Live execution (Phase 2) launches a real headless Chromium browser per
+    # test case. Kept on the free 512MB tier for now (proof-of-concept
+    # stage, per explicit decision) - a real risk on this tier is a
+    # BLOCKED/502 result under memory pressure (e.g. concurrent runs, a
+    # cold start), not data loss. Revisit "starter" once this moves past POC.
+    plan: free
+    # --with-deps tries to apt-get system libraries as root via `su`, which
+    # Render's build sandbox rejects ("su: Authentication failure") - Render's
+    # Python build image already ships the libraries Chromium needs, so we
+    # install just the browser binary instead.
+    buildCommand: pip install -r requirements.txt && playwright install chromium
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: CLIENT_ACCESS_CODES
+        sync: false
+      - key: DOWNLOAD_SIGNING_SECRET
+        sync: false
+      - key: PYTHON_VERSION
+        value: 3.11.9
+    healthCheckPath: /healthz
