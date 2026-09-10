@@ -6,7 +6,7 @@ services:
     # per test case - this does not fit reliably in Render's free 512MB
     # tier. Upgrading to "starter" is a real, ongoing cost - confirm this
     # is acceptable before deploying this change, it is not automatic.
-    plan: starter
+    plan: free
     buildCommand: pip install -r requirements.txt && playwright install --with-deps chromium
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
