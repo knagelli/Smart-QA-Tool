@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Req2QA — Run Test Cases Live</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="wrap wrap-wide">
+  <header class="hdr">
+    <h1>Run Test Cases Live</h1>
+    <p class="sub">{{ application }} &bull; against your sandbox/UAT environment. Never run this against a production system.</p>
+  </header>
+
+  {% if error %}
+  <div class="alert">{{ error }}</div>
+  {% endif %}
+
+  <div class="alert alert-info">
+    This uses a generic test user account you provide for the sandbox environment &mdash; never a real employee's credentials, and never anything but a non-production environment. Credentials you enter below are used once for this run and are never stored or logged.
+  </div>
+
+  <form class="card form" action="/execute/{{ run_id }}" method="post">
+    <label>Access code
+      <input type="password" name="access_code" required placeholder="Provided by your account manager">
+    </label>
+
+    <label>Role this test user represents
+      <input type="text" name="role_label" required placeholder="e.g. Employee, Manager, Payroll Administrator">
+      <span class="hint">Different modules often need different access levels &mdash; say which role this run is testing as.</span>
+    </label>
+
+    <label>Module / area being tested
+      <input type="text" name="module" required placeholder="e.g. Rostering, Leave Application, Timesheet, Payroll">
+    </label>
+
+    <label>Sandbox/UAT environment URL
+      <input type="text" name="env_url" required placeholder="https://yourcompany-uat.example.com">
+      <span class="hint">Must be a reachable, non-production address. Production environments are never supported.</span>
+    </label>
+
+    <label>Test-user username
+      <input type="text" name="username" required autocomplete="off">
+    </label>
+
+    <label>Test-user password
+      <input type="password" name="password" required autocomplete="off">
+    </label>
+
+    <label style="margin-bottom:8px">Select test case(s) to run (up to {{ max_selectable }} per run)</label>
+    {% if test_cases %}
+    {% for tc in test_cases %}
+    <label class="inline-check" style="margin-bottom:10px">
+      <input type="checkbox" name="select_{{ tc.tc_id }}">
+      <strong>{{ tc.tc_id }}</strong>&nbsp;&mdash;&nbsp;{{ tc.title }}
+    </label>
+    {% endfor %}
+    {% else %}
+    <p class="footnote">No test scenarios were found for this run.</p>
+    {% endif %}
+
+    <button type="submit" style="margin-top:8px">Run Selected Test Cases Live</button>
+  </form>
+  <p class="footnote">Each selected test case runs in its own isolated browser session. This can take a minute or two per case.</p>
+  <p class="footnote"><a href="/">&larr; Back to Req2QA</a></p>
+</div>
+</body>
+</html>

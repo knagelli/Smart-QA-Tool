@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Req2QA &mdash; Test Cases Confirmed</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="hdr">
+    <h1>Test Cases Confirmed</h1>
+    <p class="sub">{{ application }}</p>
+  </header>
+
+  <div class="sc">
+    <div class="card stat"><div class="n">{{ total_tcs }}</div><div class="l">Test Cases Confirmed</div></div>
+  </div>
+
+  <div class="card" style="text-align:center;margin-top:20px">
+    <p style="margin-bottom:12px;font-size:13.5px;color:var(--muted)">There's no generated report for this path &mdash; the next step is to run these confirmed cases live against your sandbox/UAT environment and get a pass/fail report with screenshot evidence.</p>
+    <a class="btn" href="/execute/{{ run_id }}">Run Test Cases Live &rarr;</a>
+  </div>
+
+  <p class="footnote"><a href="/">&larr; Back to Req2QA</a></p>
+  <p class="footnote site-footer"><a href="/privacy">Privacy Policy</a> &bull; <a href="/terms">Terms of Service</a> &bull; <a href="/security">Security Overview</a></p>
+</div>
+</body>
+</html>
