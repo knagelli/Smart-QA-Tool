@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<title>Req2QA — Confirm Imported Test Cases</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="wrap wrap-wide">
+  <header class="hdr">
+    <h1>Confirm Imported Test Cases</h1>
+    <p class="sub">{{ application }}</p>
+  </header>
+
+  <div class="alert alert-info">
+    This is what we read from your file. Nothing has been generated — check every case below,
+    fix anything that's wrong, remove any case that doesn't belong, and confirm before these
+    become executable.
+  </div>
+
+  {% if parse_notes %}
+  <div class="alert alert-warn"><strong>Parser note:</strong> {{ parse_notes }}</div>
+  {% endif %}
+
+  <form class="card form" action="/confirm-import/{{ run_id }}" method="post">
+    <input type="hidden" name="case_count" value="{{ test_cases|length }}">
+
+    {% for tc in test_cases %}
+    <div class="step-card">
+      <div class="step-card-hdr">
+        <label class="keep-toggle">
+          <input type="checkbox" name="keep_{{ loop.index0 }}" checked>
+          Keep this case
+        </label>
+        <span class="step-id">{{ tc.tc_id }}</span>
+      </div>
+
+      <label>Case ID
+        <input type="text" name="tc_id_{{ loop.index0 }}" value="{{ tc.tc_id }}">
+      </label>
+
+      <label>Title
+        <input type="text" name="title_{{ loop.index0 }}" value="{{ tc.title }}">
+      </label>
+
+      <label>Precondition
+        <textarea name="precondition_{{ loop.index0 }}" rows="2">{{ tc.precondition }}</textarea>
+      </label>
+
+      <label>Steps
+        <textarea name="steps_{{ loop.index0 }}" rows="4">{{ tc.steps }}</textarea>
+      </label>
+
+      <label>Expected result
+        <textarea name="expected_result_{{ loop.index0 }}" rows="2">{{ tc.expected_result }}</textarea>
+      </label>
+
+      {% if tc.notes %}
+      <p class="footnote"><strong>Note:</strong> {{ tc.notes }}</p>
+      {% endif %}
+    </div>
+    {% endfor %}
+
+    <button type="submit">Confirm Test Cases</button>
+  </form>
+
+  <p class="footnote"><a href="/import-tests">&larr; Start over</a></p>
+</div>
+</body>
+</html>

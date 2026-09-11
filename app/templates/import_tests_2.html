@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<title>Req2QA — Import Your Own Test Cases</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="wrap wrap-wide">
+  <header class="hdr">
+    <h1>Import Your Own Test Cases</h1>
+    <p class="sub">Already have test cases written? Skip generation and go straight to review &amp; live execution.</p>
+  </header>
+
+  {% if error %}
+  <div class="alert">{{ error }}</div>
+  {% endif %}
+
+  <div class="alert alert-info">
+    We'll read your file, extract what's already there, and show you exactly what we found for
+    you to check and correct &mdash; nothing is generated or invented, and nothing is executable
+    until you confirm it on the next screen.
+  </div>
+
+  <form class="card form" action="/import-tests" method="post" enctype="multipart/form-data">
+    <label>Access code
+      <input type="password" name="access_code" required placeholder="Provided by your account manager">
+    </label>
+
+    <label>Application under test
+      <input type="text" name="application" required placeholder="e.g. Salesforce Sales Cloud, Humanforce, Acme Internal Claims Portal">
+    </label>
+
+    <label>Test cases file
+      <input type="file" name="test_cases_file" required accept=".docx,.xlsx,.xlsm,.pdf,.txt,.csv">
+      <span class="hint">.docx, .xlsx/.xlsm, .pdf, .txt or .csv &mdash; a table works best, but a list or short prose description per case is fine too.</span>
+    </label>
+
+    <button type="submit">Extract &amp; Review Test Cases</button>
+  </form>
+  <p class="footnote">Processing usually takes a few seconds for a well-structured spreadsheet, or up to a minute for a document that needs to be read case-by-case.</p>
+  <p class="privacy-note">Your uploaded file is processed securely and is not stored beyond this review session &mdash; only the confirmed test cases you approve are kept.</p>
+  <p class="footnote"><a href="/">&larr; Back to Req2QA</a></p>
+</div>
+</body>
+</html>
