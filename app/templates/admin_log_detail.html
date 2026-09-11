@@ -1,0 +1,73 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Req2QA — Log {{ log_id }}</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background:#f4f6f5; margin:0; padding:2rem; color:#1a1a1a; }
+    a.back { color:#1c5c46; text-decoration:none; font-weight:600; }
+    h1 { font-size:1.1rem; word-break:break-all; }
+    .badge { display:inline-block; padding:0.2rem 0.6rem; border-radius:12px; font-size:0.8rem; font-weight:600; margin-left:0.5rem; }
+    .badge-ok { background:#e3f3ec; color:#1c5c46; }
+    .badge-bad { background:#fbe9e7; color:#b3261e; }
+    .badge-unknown { background:#eee; color:#777; }
+    .timeline { background:#fff; border-radius:8px; margin-top:1rem; }
+    .row { padding:0.8rem 1.2rem; border-bottom:1px solid #eee; font-size:0.9rem; }
+    .row .ts { color:#777; font-size:0.8rem; }
+    .row.error { background:#fff6f5; }
+    .row .kind { font-weight:600; text-transform:uppercase; font-size:0.75rem; color:#1c5c46; margin-right:0.5rem; }
+    .compare { background:#fff; border-radius:8px; padding:1.2rem; margin-top:1.5rem; }
+    .compare input[type=file] { margin-right:0.6rem; }
+    .compare button { padding:0.5rem 1rem; background:#1c5c46; color:#fff; border:none; border-radius:6px; cursor:pointer; }
+    .match-info { margin-top:0.8rem; padding:0.8rem; border-radius:6px; font-size:0.9rem; }
+    .match-info.match { background:#e3f3ec; color:#1c5c46; }
+    .match-info.nomatch { background:#fbe9e7; color:#b3261e; }
+    pre { white-space:pre-wrap; word-break:break-word; margin:0; font-family: ui-monospace, monospace; font-size:0.82rem; }
+  </style>
+</head>
+<body>
+  <a class="back" href="/admin/logs">&larr; Back to search</a>
+  <h1>
+    {{ log_id }}
+    {% if integrity is sameas true %}<span class="badge badge-ok">Integrity verified</span>{% endif %}
+    {% if integrity is sameas false %}<span class="badge badge-bad">⚠ Log changed since it finished</span>{% endif %}
+    {% if integrity is none %}<span class="badge badge-unknown">Integrity: not recorded (run still open, or older run)</span>{% endif %}
+  </h1>
+
+  {% if not found %}
+    <p>No log found with this ID.</p>
+  {% else %}
+  <div class="timeline">
+    {% for r in records %}
+      <div class="row {% if r.event_type == 'error' %}error{% endif %}">
+        <span class="ts">{{ r.ts }}</span>
+        <span class="kind">{{ r.kind }}{% if r.event_type %} · {{ r.event_type }}{% endif %}</span>
+        {% if r.kind == 'start' %}
+          <pre>run_type: {{ r.run_type }} | run_id: {{ r.run_id }}
+{{ r.meta | tojson(indent=2) }}</pre>
+        {% elif r.kind == 'finish' %}
+          <pre>status: {{ r.status }}
+{{ r.summary | tojson(indent=2) }}</pre>
+        {% else %}
+          <pre>{{ r.data | tojson(indent=2) }}</pre>
+        {% endif %}
+      </div>
+    {% endfor %}
+  </div>
+
+  <div class="compare">
+    <strong>Check a screenshot the client sent you</strong>
+    <p style="font-size:0.85rem; color:#555;">Upload the exact file the client attached (not a re-screenshot or a pasted image) and this will tell you plainly whether it's the authentic image this run produced.</p>
+    <form method="post" action="/admin/logs/{{ log_id }}/compare-screenshot" enctype="multipart/form-data">
+      <input type="file" name="image" accept="image/*" required>
+      <button type="submit">Check this image</button>
+    </form>
+    {% if match_info %}
+      <div class="match-info {% if 'MATCH -' in match_info and 'NO MATCH' not in match_info %}match{% else %}nomatch{% endif %}">
+        {{ match_info }}
+      </div>
+    {% endif %}
+  </div>
+  {% endif %}
+</body>
+</html>

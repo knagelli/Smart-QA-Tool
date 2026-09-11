@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Req2QA — Troubleshooting Log Access</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background:#f4f6f5; display:flex; align-items:center; justify-content:center; height:100vh; margin:0; }
+    .box { background:#fff; padding:2rem 2.5rem; border-radius:10px; box-shadow:0 2px 12px rgba(0,0,0,0.08); width:320px; }
+    h1 { font-size:1.1rem; margin:0 0 1rem; }
+    input[type=password] { width:100%; padding:0.6rem; margin:0.5rem 0 1rem; border:1px solid #ccc; border-radius:6px; box-sizing:border-box; }
+    button { width:100%; padding:0.6rem; background:#1c5c46; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:1rem; }
+    .error { color:#b3261e; font-size:0.9rem; margin-bottom:0.5rem; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>Troubleshooting Logs</h1>
+    {% if error %}<div class="error">Wrong password — try again.</div>{% endif %}
+    <form method="post" action="/admin/login">
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" autofocus required>
+      <button type="submit">View logs</button>
+    </form>
+  </div>
+</body>
+</html>

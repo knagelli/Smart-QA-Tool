@@ -1,0 +1,63 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Req2QA — Troubleshooting Logs</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background:#f4f6f5; margin:0; padding:2rem; color:#1a1a1a; }
+    h1 { font-size:1.3rem; }
+    form.search { display:flex; gap:0.5rem; margin-bottom:1.5rem; flex-wrap:wrap; }
+    input[type=text] { flex:1; min-width:220px; padding:0.6rem; border:1px solid #ccc; border-radius:6px; }
+    select { padding:0.6rem; border:1px solid #ccc; border-radius:6px; }
+    button { padding:0.6rem 1.2rem; background:#1c5c46; color:#fff; border:none; border-radius:6px; cursor:pointer; }
+    table { width:100%; border-collapse:collapse; background:#fff; border-radius:8px; overflow:hidden; }
+    th, td { text-align:left; padding:0.7rem 1rem; border-bottom:1px solid #eee; font-size:0.92rem; }
+    th { background:#eef2f0; }
+    tr:hover { background:#f9fbfa; }
+    a { color:#1c5c46; text-decoration:none; font-weight:600; }
+    .status-fail { color:#b3261e; font-weight:600; }
+    .status-ok, .status-pass { color:#1c5c46; font-weight:600; }
+    .muted { color:#777; font-size:0.85rem; }
+    .empty { padding:2rem; text-align:center; color:#777; background:#fff; border-radius:8px; }
+  </style>
+</head>
+<body>
+  <h1>Troubleshooting Logs</h1>
+  <p class="muted">Search by anything the client gave you — a reference number, run ID, or leave blank and just filter by type/status.</p>
+
+  <form class="search" method="get" action="/admin/logs">
+    <input type="text" name="q" placeholder="Search (reference number, run ID...)" value="{{ q }}">
+    <select name="run_type">
+      <option value="">All types</option>
+      <option value="generate_a" {% if run_type == 'generate_a' %}selected{% endif %}>Generation (Option A)</option>
+      <option value="generate_b" {% if run_type == 'generate_b' %}selected{% endif %}>Generation (Option B)</option>
+      <option value="import" {% if run_type == 'import' %}selected{% endif %}>Import</option>
+      <option value="execute" {% if run_type == 'execute' %}selected{% endif %}>Live execution</option>
+    </select>
+    <select name="status">
+      <option value="">Any outcome</option>
+      <option value="pass" {% if status == 'pass' %}selected{% endif %}>Pass</option>
+      <option value="fail" {% if status == 'fail' %}selected{% endif %}>Fail</option>
+      <option value="ok" {% if status == 'ok' %}selected{% endif %}>Ok</option>
+    </select>
+    <button type="submit">Search</button>
+  </form>
+
+  {% if results %}
+  <table>
+    <tr><th>Started</th><th>Type</th><th>Run</th><th>Reference</th><th>Outcome</th></tr>
+    {% for r in results %}
+    <tr onclick="window.location='/admin/logs/{{ r.log_id }}'" style="cursor:pointer">
+      <td>{{ r.started }}</td>
+      <td>{{ r.run_type }}</td>
+      <td>{{ r.run_id }}</td>
+      <td>{{ r.correlation_ref or '—' }}</td>
+      <td class="status-{{ r.status }}">{{ r.status }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <div class="empty">No logs match that search.</div>
+  {% endif %}
+</body>
+</html>
