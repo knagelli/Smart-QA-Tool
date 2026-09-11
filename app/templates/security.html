@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Req2QA — Security Overview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+{% include "_topbar.html" %}
+<div class="wrap">
+  <header class="hdr">
+    <h1>Security Overview</h1>
+    <p class="sub">How Req2QA protects your documents and access. Last updated: {{ updated_date }}</p>
+  </header>
+
+  <div class="card" style="line-height:1.75">
+    <h3 style="margin-bottom:8px">Encryption in transit</h3>
+    <p style="margin-bottom:16px">All traffic to and from Req2QA is encrypted via HTTPS. The service also sends standard hardening headers (HSTS, X-Frame-Options, X-Content-Type-Options, a restrictive Content-Security-Policy) to reduce common web attack surfaces.</p>
+
+    <h3 style="margin-bottom:8px">Access control</h3>
+    <p style="margin-bottom:16px">Every analysis requires a private access code issued to your organization. Repeated failed attempts from the same source are automatically rate-limited, and the service is configured to deny all access if it is ever misconfigured, rather than silently allowing it through.</p>
+
+    <h3 style="margin-bottom:8px">Document handling</h3>
+    <p style="margin-bottom:16px">Uploaded documents are used only to generate your report and are not stored afterward. Only the resulting report and workbook are retained, for a limited time, and are reachable only via a private, cryptographically signed link that expires automatically &mdash; not by a guessable or permanent URL.</p>
+
+    <h3 style="margin-bottom:8px">AI processing</h3>
+    <p style="margin-bottom:16px">Analysis is performed using Anthropic's Claude API. Your document content is sent to Anthropic solely to generate your report and is not used to train any model. No other third party receives your document content.</p>
+
+    <h3 style="margin-bottom:8px">Application safeguards</h3>
+    <p style="margin-bottom:16px">The service enforces file-size limits, validates that uploaded files match their claimed type before processing them, and sanitizes generated spreadsheet output against formula-injection. Error messages shown to users never expose internal system or vendor details; full diagnostic information is logged securely on our side only.</p>
+
+    <h3 style="margin-bottom:8px">Questions</h3>
+    <p>If your security team needs more detail for a vendor review &mdash; a completed questionnaire, a data processing summary, or anything else &mdash; contact <strong>kalyan@req2qa.com</strong>.</p>
+  </div>
+
+  <p class="footnote"><a href="/">&larr; Back to Req2QA</a> &bull; <a href="/privacy">Privacy Policy</a> &bull; <a href="/terms">Terms of Service</a></p>
+</div>
+{% include "_footer.html" %}
+</body>
+</html>
