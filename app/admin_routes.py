@@ -17,6 +17,7 @@
 # on the login page below.
 
 import os
+from pathlib import Path
 
 from fastapi import APIRouter, Request, Form, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -25,7 +26,8 @@ from fastapi.templating import Jinja2Templates
 from . import run_logger
 
 router = APIRouter()
-templates = Jinja2Templates(directory="app/templates")
+BASE_DIR = Path(__file__).resolve().parent
+templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 ADMIN_LOG_KEY = os.environ.get("ADMIN_LOG_KEY")
 COOKIE_NAME = "req2qa_admin_session"
