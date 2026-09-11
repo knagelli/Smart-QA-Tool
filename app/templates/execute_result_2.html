@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<title>Req2QA — Execution Complete</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="hdr">
+    <h1>Live Execution Complete</h1>
+    <p class="sub">{{ application }} &bull; role: {{ role_label }} &bull; {{ module }} &bull; environment: {{ environment_label }}</p>
+  </header>
+
+  <div class="sc">
+    <div class="card stat"><div class="n">{{ total }}</div><div class="l">Test Cases Run</div></div>
+    <div class="card stat"><div class="n">{{ passed }}</div><div class="l">Passed</div></div>
+    <div class="card stat"><div class="n">{{ failed }}</div><div class="l">Failed</div></div>
+    <div class="card stat"><div class="n">{{ blocked }}</div><div class="l">Blocked</div></div>
+  </div>
+
+  <div class="card downloads">
+    <a class="btn" id="report-link" href="/download-exec/{{ run_id }}/{{ exec_id }}/report.html?token={{ download_token }}">Open Execution Report</a>
+  </div>
+  <div class="copy-link-row">
+    <button type="button" class="btn secondary copy-link-btn" data-copy-target="report-link">Copy Report Link</button>
+    <span class="hint" data-copy-status></span>
+  </div>
+  <p class="footnote">This link works for 7 days. Save the report if you need it longer, or find this run again later via <a href="/history">Run History</a>.</p>
+  <script>
+  (function(){
+    var btn = document.querySelector('[data-copy-target="report-link"]');
+    if (!btn) return;
+    btn.addEventListener('click', function(){
+      var url = document.getElementById('report-link').href;
+      var status = document.querySelector('[data-copy-status]');
+      navigator.clipboard.writeText(url).then(function(){
+        if (status) { status.textContent = 'Copied!'; setTimeout(function(){ status.textContent=''; }, 2500); }
+      }).catch(function(){
+        if (status) { status.textContent = 'Could not copy — select and copy the link manually.'; }
+      });
+    });
+  })();
+  </script>
+
+  <p class="footnote"><a href="/execute/{{ run_id }}">&larr; Run more test cases</a> &bull; <a href="/">Start a new analysis</a></p>
+  <p class="footnote site-footer"><a href="/privacy">Privacy Policy</a> &bull; <a href="/terms">Terms of Service</a> &bull; <a href="/security">Security Overview</a></p>
+</div>
+</body>
+</html>

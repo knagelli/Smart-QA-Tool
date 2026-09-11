@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<title>Req2QA — Privacy Policy</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+{% include "_topbar.html" %}
+<div class="wrap">
+  <header class="hdr">
+    <h1>Privacy Policy</h1>
+    <p class="sub">Last updated: {{ updated_date }}</p>
+  </header>
+
+  <div class="card" style="line-height:1.75">
+    <p style="margin-bottom:16px"><strong>Req2QA</strong> ("we", "us") operates req2qa.com, a requirements-to-test-coverage tool for software QA teams. This policy explains what we do with the files and information you submit when you use the service.</p>
+
+    <h3 style="margin-bottom:8px">What we collect</h3>
+    <p style="margin-bottom:16px">When you run an analysis, we temporarily process the requirements document, project brief, and process-flow diagram(s) you upload, along with the application name and any optional notes you provide, in order to generate your report. We also record your access code, the client name associated with it, and basic run metadata (date, application name, filename) in a lightweight internal log for account administration.</p>
+
+    <h3 style="margin-bottom:8px">What we don't do</h3>
+    <p style="margin-bottom:16px">We do not sell your data. We do not use your uploaded documents to train any AI model. Your files are not retained after processing &mdash; only the resulting report and workbook are kept, and only for a limited time (currently 7 days from generation, via a private, time-limited link).</p>
+
+    <h3 style="margin-bottom:8px">Third-party processing</h3>
+    <p style="margin-bottom:16px">To generate your report, the content of your uploaded documents is sent to Anthropic's Claude API for analysis. Anthropic acts as a data processor for this purpose under its own API terms and data-handling commitments. No other third party receives your document content. [FILL IN: link to Anthropic's API/commercial terms if you want to reference them directly, e.g. https://www.anthropic.com/legal/commercial-terms]</p>
+
+    <h3 style="margin-bottom:8px">Data retention</h3>
+    <p style="margin-bottom:16px">Uploaded source documents are used only for the duration of processing and are not stored afterward. Generated reports and workbooks &mdash; including any screenshots captured during a live-execution run &mdash; are retained for up to 7 days to allow you to download them, then automatically deleted.</p>
+    <p style="margin-bottom:16px">To let you find a past run again (for example, if you closed the browser before saving your report link), we keep a lightweight run history for each access code &mdash; the date, application name, run type, and an optional name/initials you choose to enter &mdash; for up to 30 days, after which it is automatically deleted. This history is reachable only by entering the access code it belongs to, via <a href="/history">Run History</a>; it does not contain your uploaded documents, requirements, or report content, and any optional initials you enter are used solely to let you filter the list to your own runs and are never verified as an identity.</p>
+    <p style="margin-bottom:16px">Separately, we keep an internal operational log of each run (what happened, step by step, and the outcome) for up to 90 days, used only for troubleshooting an issue you report to us. This log never contains your login credentials, any text entered into a form field during execution, or the content of your uploaded documents. For a live-execution run, this log also retains a cryptographic fingerprint (a SHA-256 hash) of each screenshot &mdash; not the image itself &mdash; for the same 90 days; this lets us verify that a screenshot you later send us is authentic and unmodified, without our needing to hold the image itself beyond the 7-day window above. This troubleshooting log is accessible only to us, never to any client, and is not linked from or reachable through the application itself.</p>
+
+    <h3 style="margin-bottom:8px">Analytics</h3>
+    <p style="margin-bottom:16px">We use a cookieless, privacy-respecting analytics service (Plausible) to see aggregate traffic to req2qa.com &mdash; page views and referring sources only. It does not use cookies, does not track you across other websites, and does not collect any personally identifiable information.</p>
+
+    <h3 style="margin-bottom:8px">Security</h3>
+    <p style="margin-bottom:16px">Access to the service requires a private access code issued to your organization. All traffic is encrypted in transit (HTTPS). Download links to your reports are cryptographically signed and expire automatically. See our <a href="/security">Security Overview</a> for more detail.</p>
+
+    <h3 style="margin-bottom:8px">Your rights</h3>
+    <p style="margin-bottom:16px">You can request deletion of your run history or ask questions about how your data is handled by contacting us at <strong>kalyan@req2qa.com</strong>.</p>
+
+    <h3 style="margin-bottom:8px">Changes to this policy</h3>
+    <p>We will update the "last updated" date above if this policy changes materially. [FILL IN: any notice process you want to commit to, e.g. "and notify active clients by email."]</p>
+  </div>
+
+  <p class="footnote"><a href="/">&larr; Back to Req2QA</a> &bull; <a href="/terms">Terms of Service</a> &bull; <a href="/security">Security Overview</a></p>
+</div>
+{% include "_footer.html" %}
+</body>
+</html>

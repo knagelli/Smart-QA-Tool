@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<title>Req2QA — Run History</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+{% include "_topbar.html" %}
+<div class="wrap wrap-wide">
+  <div class="narrow-inner">
+  <header class="hdr">
+    <h1>Run History</h1>
+    <p class="sub">Look up past runs made with your access code &mdash; useful if you closed the browser tab before saving a report link.</p>
+  </header>
+
+  {% if error %}
+  <div class="alert">{{ error }}</div>
+  {% endif %}
+
+  <form class="card form" action="/history" method="post">
+    <label>Access code
+      <input type="password" name="access_code" required placeholder="Provided by your account manager" value="">
+    </label>
+    <label>Your name or initials <span class="opt">(optional)</span>
+      <input type="text" name="initials" maxlength="40" placeholder="e.g. JD" value="{{ initials or '' }}">
+      <span class="hint">If your team shares one access code, entering the same initials each time you run a test lets you filter this list down to just your own runs.</span>
+    </label>
+    <button type="submit">Look Up My Runs</button>
+  </form>
+
+  {% if entries is not none %}
+    {% if entries|length == 0 %}
+    <div class="alert alert-info">No runs found for this access code yet.</div>
+    {% else %}
+
+      {% if initials and my_entries is defined and my_entries|length > 0 %}
+      <div class="history-toggle">
+        <button type="button" class="btn secondary" data-history-toggle data-target="mine">Show only my runs ({{ my_entries|length }})</button>
+        <button type="button" class="btn secondary" data-history-toggle data-target="all" hidden>Show all runs for this code ({{ entries|length }})</button>
+      </div>
+      {% endif %}
+
+      <div id="history-list-all" class="history-list">
+        {% for row in entries %}
+        <div class="history-row{% if row.expired %} history-row-expired{% endif %}"{% if initials and row.initials|lower == initials|lower %} data-mine="1"{% endif %}>
+          <div class="history-row-main">
+            <span class="history-app">{{ row.application }}</span>
+            <span class="history-meta">{{ row.run_date }} &bull; {{ {"execute": "Live execution", "imported": "Imported test cases"}.get(row.kind, "Report") }}{% if row.initials %} &bull; {{ row.initials }}{% endif %}</span>
+          </div>
+          <div class="history-row-actions">
+            {% if row.expired %}
+              <span class="history-expired-tag">{{ "Expired — run again to continue" if row.kind == "imported" else "Expired — re-run to get a fresh report" }}</span>
+            {% else %}
+              {% if row.download_url %}<a class="btn" href="{{ row.download_url }}">{{ "Open Execution Report" if row.kind == "execute" else "Open Report" }}</a>{% endif %}
+              {% if row.data_url %}<a class="btn secondary" href="{{ row.data_url }}">Excel Workbook</a>{% endif %}
+              {% if row.execute_url %}<a class="btn" href="{{ row.execute_url }}">Continue to Live Execution &rarr;</a>{% endif %}
+            {% endif %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+
+    {% endif %}
+  {% endif %}
+
+  <p class="footnote"><a href="/">&larr; Back to Req2QA</a></p>
+  </div>
+</div>
+{% include "_footer.html" %}
+<script>
+(function(){
+  var toggles = document.querySelectorAll('[data-history-toggle]');
+  if (!toggles.length) return;
+  var rows = document.querySelectorAll('.history-row');
+  toggles.forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var showMineOnly = btn.getAttribute('data-target') === 'mine';
+      rows.forEach(function(r){
+        if (showMineOnly) { r.hidden = !r.hasAttribute('data-mine'); }
+        else { r.hidden = false; }
+      });
+      toggles.forEach(function(b){ b.hidden = (b === btn); });
+    });
+  });
+})();
+</script>
+</body>
+</html>
