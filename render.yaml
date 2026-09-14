@@ -1,0 +1,54 @@
+services:
+  - type: web
+    name: smart-qa-tool
+    runtime: python
+    # Upgraded from free -> starter (2026-09-14): the free tier's ephemeral
+    # filesystem was wiping run history and in-progress/completed execution
+    # data on every restart/spin-down/redeploy - a real "your work
+    # disappeared" bug, not just a scaling limitation. Starter is required
+    # for a persistent disk (see `disks:` below) to fix that; 0.5 CPU/512MB
+    # is unchanged from before and is fine for today's sequential,
+    # one-Chromium-at-a-time execution model - only the plan tier changed,
+    # not the compute size.
+    plan: starter
+    # --with-deps tries to apt-get system libraries as root via `su`, which
+    # Render's build sandbox rejects ("su: Authentication failure") - Render's
+    # Python build image already ships the libraries Chromium needs, so we
+    # install just the browser binary instead.
+    buildCommand: pip install -r requirements.txt && playwright install chromium
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: CLIENT_ACCESS_CODES
+        sync: false
+      - key: DOWNLOAD_SIGNING_SECRET
+        sync: false
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      # Without this, `playwright install chromium` in buildCommand writes
+      # the browser binary to the default cache path (~/.cache/ms-playwright),
+      # which is not reliably the same location the running instance reads
+      # from on Render - producing "BrowserType.launch: Executable doesn't
+      # exist at /opt/render/.cache/ms-playwright/..." at runtime even though
+      # the build step reported success. Pinning PLAYWRIGHT_BROWSERS_PATH to 0
+      # installs the browser inside the Python venv's own site-packages
+      # instead, which is guaranteed to be part of the same deployed
+      # artifact the running instance actually uses.
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: "0"
+      # Everything persisted (runs/, executions/, screenshots, fixtures,
+      # client_history.jsonl) is written under DATA_DIR - pointed at the
+      # disk below, so it survives restarts/redeploys instead of living
+      # inside the code checkout, which Render replaces on every deploy.
+      - key: DATA_DIR
+        value: /var/data
+      # Separate from DATA_DIR because run_logger.py predates it and reads
+      # its own env var - same disk, its own subfolder.
+      - key: RUN_LOG_DIR
+        value: /var/data/run_logs
+    healthCheckPath: /healthz
+    disks:
+      - name: req2qa-data
+        mountPath: /var/data
+        sizeGB: 1
