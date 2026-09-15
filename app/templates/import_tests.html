@@ -37,9 +37,19 @@
       <input type="text" name="application" required placeholder="e.g. Salesforce Sales Cloud, Humanforce, Acme Internal Claims Portal">
     </label>
 
-    <label>Test cases file
-      <input type="file" name="test_cases_file" required accept=".docx,.xlsx,.xlsm,.pdf,.txt,.csv">
-      <span class="hint">.docx, .xlsx/.xlsm, .pdf, .txt or .csv &mdash; a table works best, but a list or short prose description per case is fine too.</span>
+    <label>Test cases file(s)
+      <input type="file" name="test_cases_files" required multiple accept=".docx,.xlsx,.xlsm,.pdf,.txt,.csv">
+      <span class="hint">.docx, .xlsx/.xlsm, .pdf, .txt or .csv &mdash; a table works best, but a list or short prose description per case is fine too. You can select more than one file if your test cases are split across several documents.</span>
+    </label>
+
+    <label>Requirements document <span class="opt">(optional)</span>
+      <input type="file" name="requirements_file" accept=".docx,.xlsx,.xlsm,.pdf,.txt,.csv">
+      <span class="hint">If you'd like a best-effort traceability check (which requirements your test cases appear to cover), attach your requirements document here. This is an AI-inferred match, not a guarantee &mdash; your test cases were written independently, so we're matching them after the fact.</span>
+    </label>
+
+    <label>Process flow diagram(s) <span class="opt">(optional, for custom-built applications)</span>
+      <input type="file" name="diagram_files" multiple accept=".png,.jpg,.jpeg,.pdf">
+      <span class="hint">If this is a custom-built application, you can attach flow/screen diagrams so we can read the process flow alongside your requirements.</span>
     </label>
 
     <label>Your name or initials <span class="opt">(optional)</span>

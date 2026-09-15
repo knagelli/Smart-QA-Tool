@@ -28,6 +28,32 @@
   <div class="alert alert-warn"><strong>Parser note:</strong> {{ parse_notes }}</div>
   {% endif %}
 
+  {% if traceability_error %}
+  <div class="alert alert-warn">{{ traceability_error }}</div>
+  {% endif %}
+
+  {% if traceability and traceability.validation %}
+  <div class="card">
+    <h2>Traceability check (best effort)</h2>
+    <p class="footnote">
+      This is an AI-inferred match between your requirements and your test cases, made after
+      the fact - your test cases weren't tagged with requirement IDs when written, so this is
+      our best guess, not a verified guarantee. Treat "not covered" as worth a second look, and
+      treat "covered" as a starting point for your own confirmation, not a certification.
+    </p>
+    <table class="trace-table">
+      <tr><th>Requirement</th><th>Status</th><th>Matched test case(s)</th></tr>
+      {% for v in traceability.validation %}
+      <tr>
+        <td>{{ v.requirement }}</td>
+        <td>{% if v.covered %}Likely covered{% else %}Not matched{% endif %}</td>
+        <td>{{ v.matched_tc_ids|join(', ') if v.matched_tc_ids else '—' }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endif %}
+
   <form class="card form" action="/confirm-import/{{ run_id }}" method="post">
     <input type="hidden" name="case_count" value="{{ test_cases|length }}">
 
