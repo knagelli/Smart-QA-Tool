@@ -1,0 +1,52 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Req2QA — Trial Signups</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background:#f4f6f5; margin:0; padding:2rem; color:#1a1a1a; }
+    h1 { font-size:1.3rem; }
+    p.muted { color:#777; font-size:0.85rem; }
+    table { width:100%; border-collapse:collapse; background:#fff; border-radius:8px; overflow:hidden; }
+    th, td { text-align:left; padding:0.7rem 1rem; border-bottom:1px solid #eee; font-size:0.88rem; vertical-align:top; }
+    th { background:#eef2f0; }
+    .status-unused { color:#1c5c46; font-weight:600; }
+    .status-reserved { color:#a06a00; font-weight:600; }
+    .status-used { color:#555; font-weight:600; }
+    code { background:#f0f0f0; padding:0.15rem 0.4rem; border-radius:4px; }
+    .empty { padding:2rem; text-align:center; color:#777; background:#fff; border-radius:8px; }
+    .reset-btn { background:#b3261e; color:#fff; border:none; border-radius:6px; padding:0.35rem 0.7rem; font-size:0.8rem; cursor:pointer; }
+  </style>
+</head>
+<body>
+  <h1>Trial Signups</h1>
+  <p class="muted">Newest first. Timestamps are UTC. "Reserved" means a generation attempt is in progress and auto-releases after 30 minutes if abandoned.</p>
+
+  {% if signups %}
+  <table>
+    <tr><th>Signed up</th><th>Company</th><th>Contact</th><th>Email</th><th>Testing</th><th>Code</th><th>Status</th><th>Run ID</th><th>Test cases</th><th></th></tr>
+    {% for s in signups %}
+    <tr>
+      <td>{{ s.created_at }}</td>
+      <td>{{ s.company }}</td>
+      <td>{{ s.contact_name }}</td>
+      <td>{{ s.email }}</td>
+      <td>{{ s.application or '—' }}</td>
+      <td><code>{{ s.code }}</code></td>
+      <td class="status-{{ s.status }}">{{ s.status }}</td>
+      <td>{{ s.run_id or '—' }}</td>
+      <td>{{ s.test_case_count if s.test_case_count is not none else '—' }}</td>
+      <td>
+        <form method="post" action="/admin/trials/reset" style="margin:0">
+          <input type="hidden" name="domain" value="{{ s.domain }}">
+          <button type="submit" class="reset-btn" title="Wipes this domain's trial record so it can sign up again - use if this signup was a mistake or a wrong email.">Reset domain</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <div class="empty">No trial signups yet.</div>
+  {% endif %}
+</body>
+</html>

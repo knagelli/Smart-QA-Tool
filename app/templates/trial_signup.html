@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<title>Req2QA — Start Your Free Trial</title>
+<meta name="description" content="Get a free Req2QA trial access code — up to 10 test cases, generated from your requirements document.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+{% include "_topbar.html" %}
+<div class="wrap">
+  <header class="hdr">
+    <h1>Start Your Free Trial</h1>
+    <p class="sub">Up to 10 test cases, generated from your own requirements document &mdash; no card, no obligation.</p>
+  </header>
+
+  {% if error %}
+  <div class="alert">{{ error }}</div>
+  {% endif %}
+
+  <div class="alert alert-info">
+    Free trials are available to business email addresses only, one per company. We'll email you a
+    one-time access code &mdash; nothing is generated until you use it on the homepage.
+  </div>
+
+  <form class="card form" action="/trial-signup" method="post">
+    <label>Your name
+      <input type="text" name="contact_name" required placeholder="e.g. Priya Sharma">
+    </label>
+
+    <label>Company
+      <input type="text" name="company" required placeholder="e.g. Acme Pty Ltd">
+    </label>
+
+    <label>Work email
+      <input type="email" name="email" required placeholder="you@yourcompany.com">
+      <span class="hint">Personal email providers (Gmail, Outlook, etc.) can't be used for the free trial &mdash; email <a href="mailto:kalyan@req2qa.com">kalyan@req2qa.com</a> directly instead.</span>
+    </label>
+
+    <label>What are you testing? <span class="opt">(optional)</span>
+      <input type="text" name="application" maxlength="120" placeholder="e.g. Our internal claims portal">
+    </label>
+
+    <button type="submit" style="margin-top:8px">Get My Free Trial Code</button>
+  </form>
+  <p class="footnote"><a href="/">&larr; Back to Req2QA</a></p>
+</div>
+{% include "_footer.html" %}
+</body>
+</html>

@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<title>Req2QA — Trial Signup Received</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+{% include "_topbar.html" %}
+<div class="wrap">
+  <header class="hdr">
+    {% if email_sent %}
+    <h1>Check Your Inbox</h1>
+    <p class="sub">We've emailed your free trial access code.</p>
+    {% else %}
+    <h1>Signup Received</h1>
+    <p class="sub">Something went wrong sending your code by email &mdash; but your signup was recorded.</p>
+    {% endif %}
+  </header>
+
+  {% if email_sent %}
+  <div class="alert alert-info">
+    Your code should land in your inbox shortly (check spam/junk if it doesn't appear in a few minutes).
+    Enter it as your access code on the <a href="/">Req2QA homepage</a> to run your free generation.
+  </div>
+  {% else %}
+  <div class="alert">
+    We couldn't deliver the email right now. Your signup is recorded, so reach out to
+    <a href="mailto:kalyan@req2qa.com">kalyan@req2qa.com</a> with your company name and we'll get your
+    access code to you directly.
+  </div>
+  {% endif %}
+
+  <p class="footnote"><a href="/">&larr; Back to Req2QA</a></p>
+</div>
+{% include "_footer.html" %}
+</body>
+</html>
