@@ -10,7 +10,9 @@
       <a href="/about">About</a>
       <a href="/security">Security</a>
     </nav>
+    {% if not hide_trial_cta %}
     <a class="btn topbar-cta" href="/trial-signup">Start Free Trial</a>
+    {% endif %}
   </div>
 </div>
 <script src="/static/topbar.js" defer></script>
