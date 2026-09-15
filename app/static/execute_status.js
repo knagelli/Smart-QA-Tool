@@ -52,10 +52,21 @@
       var right = document.createElement("div");
       right.className = "case-right";
       if (status === "IN_PROGRESS" && c.step && c.max_steps) {
-        var stepHint = document.createElement("span");
-        stepHint.className = "step-hint";
-        stepHint.textContent = "step " + c.step + "/" + c.max_steps;
-        right.appendChild(stepHint);
+        // Deliberately does NOT show the raw step/max_steps numbers - a
+        // client reading "step 17/60" could easily (and wrongly) read that
+        // as "this test case has 60 steps," when max_steps is really an
+        // internal safety cap on the automation agent's own tool-calling
+        // loop, unrelated to the test case's actual complexity. A small
+        // visual progress bar conveys "still working, making progress"
+        // without implying a specific, misleading step count.
+        var miniBar = document.createElement("span");
+        miniBar.className = "step-progress-mini";
+        var miniFill = document.createElement("span");
+        miniFill.className = "step-progress-mini-fill";
+        var pct = Math.min(100, Math.round((c.step / c.max_steps) * 100));
+        miniFill.style.width = pct + "%";
+        miniBar.appendChild(miniFill);
+        right.appendChild(miniBar);
       }
       var pill = document.createElement("span");
       pill.className = "status-pill " + status;
