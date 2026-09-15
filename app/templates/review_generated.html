@@ -35,7 +35,7 @@
 
   <form class="card form" action="/confirm-generated/{{ run_id }}" method="post">
     <label>Your access code
-      <input type="text" name="access_code" required autocomplete="off">
+      <input type="password" name="access_code" required autocomplete="off">
     </label>
 
     {% for tc in test_cases %}
