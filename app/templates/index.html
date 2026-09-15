@@ -89,9 +89,13 @@
           <span class="browser-dot" style="background:#ED6A5E"></span>
           <span class="browser-dot" style="background:#F4BF4F"></span>
           <span class="browser-dot" style="background:#61C554"></span>
-          <span class="browser-frame-url">req2qa.com/result</span>
+          <div class="frame-tabs">
+            <button type="button" class="frame-tab active" data-panel="hero-panel-report">Test Report</button>
+            <button type="button" class="frame-tab" data-panel="hero-panel-trace">Traceability</button>
+            <button type="button" class="frame-tab" data-panel="hero-panel-gaps">Gaps</button>
+          </div>
         </div>
-        <div class="browser-frame-body">
+        <div class="browser-frame-body" id="hero-panel-report">
           <div class="mock-report-hdr">
             <span class="mock-report-title">Acme Rostering &mdash; Test Coverage Report</span>
             <span class="mock-report-count">14 test cases</span>
@@ -116,6 +120,59 @@
             <span class="mock-tc-title">Timesheet rejects a negative hours entry</span>
             <span class="mock-pill mock-pill-pass">PASS</span>
           </div>
+        </div>
+
+        <div class="browser-frame-body" id="hero-panel-trace" hidden>
+          <div class="mock-report-hdr">
+            <span class="mock-report-title">Acme Rostering &mdash; Requirements Traceability</span>
+            <span class="mock-report-count">4 requirements</span>
+          </div>
+          <div class="trace-row">
+            <span class="trace-req">REQ-01</span>
+            <span class="trace-desc">Managers can approve or reject leave requests</span>
+            <span class="trace-tcs">TC-001</span>
+            <span class="mock-pill mock-pill-pass">COVERED</span>
+          </div>
+          <div class="trace-row">
+            <span class="trace-req">REQ-02</span>
+            <span class="trace-desc">System prevents overlapping shift submissions</span>
+            <span class="trace-tcs">TC-002</span>
+            <span class="mock-pill mock-pill-pass">COVERED</span>
+          </div>
+          <div class="trace-row">
+            <span class="trace-req">REQ-03</span>
+            <span class="trace-desc">Affected staff are notified on roster publish</span>
+            <span class="trace-tcs">TC-003</span>
+            <span class="mock-pill mock-pill-partial">PARTIAL</span>
+          </div>
+          <div class="trace-row">
+            <span class="trace-req">REQ-04</span>
+            <span class="trace-desc">Timesheets reject negative hour entries</span>
+            <span class="trace-tcs">TC-004</span>
+            <span class="mock-pill mock-pill-pass">COVERED</span>
+          </div>
+        </div>
+
+        <div class="browser-frame-body" id="hero-panel-gaps" hidden>
+          <div class="mock-report-hdr">
+            <span class="mock-report-title">Acme Rostering &mdash; Gaps Found</span>
+            <span class="mock-report-count">2 flagged</span>
+          </div>
+          <div class="gap-row">
+            <div class="gap-hdr">
+              <span class="gap-title">Concurrent edits by two managers</span>
+              <span class="mock-pill mock-pill-gap">NOT SPECIFIED</span>
+            </div>
+            <span class="gap-note">Seen in the process flow (two manager roles can open the same roster) but no requirement says what should happen if both submit changes at once.</span>
+          </div>
+          <div class="gap-row">
+            <div class="gap-hdr">
+              <span class="gap-title">REQ-05 &mdash; &ldquo;system should handle errors gracefully&rdquo;</span>
+              <span class="mock-pill mock-pill-gap">AMBIGUOUS</span>
+            </div>
+            <span class="gap-note">No measurable pass/fail condition, so it can't be turned into a test case as written &mdash; needs a concrete definition of &ldquo;gracefully.&rdquo;</span>
+          </div>
+          <div class="gap-footnote">Gaps are drawn from what's actually in your documents &mdash; not guessed.</div>
         </div>
       </div>
     </div>
@@ -353,6 +410,7 @@
 <div id="initial-tab" data-active-tab="{{ active_tab or '' }}" hidden></div>
 <script src="/static/chooser.js"></script>
 <script src="/static/roi_calculator.js" defer></script>
+<script src="/static/hero_tabs.js" defer></script>
 {% include "_footer.html" %}
 </body>
 </html>
