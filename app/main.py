@@ -58,7 +58,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .extract import extract_text
-from .qa_engine import run_qa_analysis, run_qa_analysis_custom, structure_existing_test_cases
+from .qa_engine import run_qa_analysis, run_qa_analysis_custom, structure_existing_test_cases, match_requirements_to_test_cases
 from .report_builder import build_html, build_xlsx, build_html_custom, build_xlsx_custom
 from .diagram_parser import parse_flow_diagrams
 from .execute_engine import execute_test_case, ExecutionError
@@ -879,6 +879,7 @@ async def analyze(
                 "test_cases": data.get("test_scenarios", []),
                 "quota_note": quota_note,
                 "error": None,
+                "hide_trial_cta": True,
             },
         )
 
@@ -912,6 +913,7 @@ async def analyze(
             "flagged": flagged,
             "total_tcs": total_tcs,
             "baseline_version": data["baseline_version"],
+            "hide_trial_cta": True,
         },
     )
 
@@ -943,6 +945,7 @@ async def confirm_generated(request: Request, run_id: str, access_code: str = Fo
             {
                 "run_id": run_id, "application": data.get("application", ""),
                 "test_cases": data.get("test_scenarios", []), "quota_note": None, "error": msg,
+                "hide_trial_cta": True,
             },
             status_code=code,
         )
@@ -999,6 +1002,7 @@ async def confirm_generated(request: Request, run_id: str, access_code: str = Fo
             "total_tcs": kept_count,
             "baseline_version": data.get("baseline_version", ""),
             "quota_warning": quota_warning,
+            "hide_trial_cta": True,
         },
     )
 
@@ -1133,6 +1137,7 @@ async def analyze_custom(
             "run_id": run_id,
             "application": application,
             "flow": flow,
+            "hide_trial_cta": True,
         },
     )
 
@@ -1238,6 +1243,7 @@ async def confirm_flow(request: Request, run_id: str):
             "total_flow_steps": len(confirmed_steps),
             "uncovered_steps": uncovered_steps,
             "baseline_version": data["baseline_version"],
+            "hide_trial_cta": True,
         },
     )
 
@@ -1253,6 +1259,7 @@ async def confirm_flow(request: Request, run_id: str):
 IMPORT_PENDING_DIR = RUNS_DIR / "pending_import"
 IMPORT_PENDING_DIR.mkdir(exist_ok=True)
 MAX_IMPORTED_CASES = 100  # sanity cap - a single document producing more than this is almost certainly a parsing problem, not a real test suite
+MAX_TEST_CASE_FILES = 5  # caps the number of AI-structuring calls one import request can trigger
 
 
 def _sweep_pending_imports():
@@ -1281,7 +1288,9 @@ async def import_tests(
     access_code: str = Form(...),
     application: str = Form(...),
     initials: str = Form(""),
-    test_cases_file: UploadFile = File(...),
+    test_cases_files: List[UploadFile] = File(...),
+    requirements_file: UploadFile | None = File(None),
+    diagram_files: List[UploadFile] = File([]),
 ):
     _sweep_pending_imports()
     _sweep_completed_runs()
@@ -1294,13 +1303,22 @@ async def import_tests(
     except HTTPException as e:
         return err(e.detail, code=e.status_code)
 
-    raw_bytes = await test_cases_file.read()
-    if not raw_bytes:
-        return err("The uploaded file is empty.")
-    if len(raw_bytes) > MAX_DOC_BYTES:
-        return err(f"That file is too large (max {MAX_DOC_BYTES // (1024*1024)} MB).")
-    if not _validate_upload(test_cases_file.filename, raw_bytes):
-        return err("That file doesn't look like a valid document of its type. Please re-export and try again.")
+    test_cases_files = [f for f in test_cases_files if f.filename]
+    if not test_cases_files:
+        return err("Please attach at least one test cases file.")
+    if len(test_cases_files) > MAX_TEST_CASE_FILES:
+        return err(f"Please attach at most {MAX_TEST_CASE_FILES} test case files at a time.")
+
+    reads = []
+    for f in test_cases_files:
+        raw = await f.read()
+        if not raw:
+            return err(f"'{f.filename}' is empty.")
+        if len(raw) > MAX_DOC_BYTES:
+            return err(f"'{f.filename}' is too large (max {MAX_DOC_BYTES // (1024*1024)} MB).")
+        if not _validate_upload(f.filename, raw):
+            return err(f"'{f.filename}' doesn't look like a valid document of its type. Please re-export and try again.")
+        reads.append((f.filename, raw))
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -1310,47 +1328,111 @@ async def import_tests(
     run_id = uuid.uuid4().hex[:12]
     rl = run_logger.RunLog.start("import", run_id, {
         "application": application,
-        "filename": test_cases_file.filename,
-        "file_size": len(raw_bytes),
+        "filenames": [name for name, _ in reads],
+        "file_count": len(reads),
     })
 
-    # Deterministic path first (free, instant, can't misread a clean table) -
-    # only falls through to AI structuring if headers aren't confidently
-    # recognized, or the file isn't tabular at all (.docx/.txt/.pdf).
-    parsed_cases = try_parse_tabular(test_cases_file.filename, raw_bytes)
-    parser_path = "deterministic_tabular"
-    parse_notes = ""
-    if parsed_cases is None:
-        parser_path = "ai_structuring_fallback"
-        try:
-            raw_text = extract_text(test_cases_file.filename, raw_bytes)
-        except Exception as e:
-            ref = _log_and_ref(e, "extract_text failed in /import-tests")
-            rl.finish("fail", {"correlation_ref": ref, "error": str(e), "parser_path": parser_path})
-            return err(GENERIC_ERROR_MESSAGE.format(ref=ref))
-        if not raw_text.strip():
-            rl.finish("fail", {"error": "no text extracted", "parser_path": parser_path})
-            return err("No text could be extracted from that file.")
-        try:
-            structured = structure_existing_test_cases(application, raw_text, api_key)
-        except Exception as e:
-            ref = _log_and_ref(e, "structure_existing_test_cases failed in /import-tests")
-            rl.finish("fail", {"correlation_ref": ref, "error": str(e), "parser_path": parser_path})
-            return err(GENERIC_ERROR_MESSAGE.format(ref=ref), code=502)
-        parsed_cases = structured.get("test_cases", [])
-        parse_notes = structured.get("parse_notes", "")
+    # Parse each test-case file independently (deterministic tabular path
+    # first, per file - a client mixing one clean spreadsheet with one prose
+    # doc shouldn't have the whole batch fall back to AI structuring just
+    # because one file needed it), then merge. tc_id collisions across files
+    # are re-numbered so nothing silently overwrites another file's case.
+    parsed_cases = []
+    parser_paths_used = set()
+    parse_notes_parts = []
+    for filename, raw in reads:
+        file_cases = try_parse_tabular(filename, raw)
+        if file_cases is not None:
+            parser_paths_used.add("deterministic_tabular")
+        else:
+            parser_paths_used.add("ai_structuring_fallback")
+            try:
+                raw_text = extract_text(filename, raw)
+            except Exception as e:
+                ref = _log_and_ref(e, "extract_text failed in /import-tests")
+                rl.finish("fail", {"correlation_ref": ref, "error": str(e), "filename": filename})
+                return err(GENERIC_ERROR_MESSAGE.format(ref=ref))
+            if not raw_text.strip():
+                continue
+            try:
+                structured = structure_existing_test_cases(application, raw_text, api_key)
+            except Exception as e:
+                ref = _log_and_ref(e, "structure_existing_test_cases failed in /import-tests")
+                rl.finish("fail", {"correlation_ref": ref, "error": str(e), "filename": filename})
+                return err(GENERIC_ERROR_MESSAGE.format(ref=ref), code=502)
+            file_cases = structured.get("test_cases", [])
+            if structured.get("parse_notes"):
+                parse_notes_parts.append(f"{filename}: {structured['parse_notes']}")
+        parsed_cases.extend(file_cases or [])
+
+    # Re-number tc_ids sequentially across the merged set so files with
+    # overlapping/default IDs (e.g. every file using "TC-001") don't collide.
+    for i, tc in enumerate(parsed_cases):
+        tc["tc_id"] = f"TC-{i+1:03d}"
+    parser_path = "+".join(sorted(parser_paths_used)) or "none"
+    parse_notes = " | ".join(parse_notes_parts)
 
     if not parsed_cases:
         rl.finish("fail", {"error": "no test cases identified", "parser_path": parser_path})
         return err(
-            "No test cases could be identified in that file. "
+            "No test cases could be identified in those file(s). "
             + (parse_notes or "Try a file with clearer per-case structure (a table, or one case per section).")
         )
     if len(parsed_cases) > MAX_IMPORTED_CASES:
         rl.finish("fail", {"error": "too many test cases", "count": len(parsed_cases), "parser_path": parser_path})
-        return err(f"That file appears to contain more than {MAX_IMPORTED_CASES} test cases - please split it into smaller batches.")
+        return err(f"Those file(s) appear to contain more than {MAX_IMPORTED_CASES} test cases combined - please split into smaller batches.")
 
-    rl.finish("ok", {"parser_path": parser_path, "test_case_count": len(parsed_cases)})
+    # Optional requirements doc -> best-effort traceability matrix. Optional
+    # diagram(s) -> reuses the same custom-app diagram parser (see
+    # diagram_parser.py) to fold flow-doc content into the same traceability
+    # pass for a custom-built application, rather than duplicating a second
+    # vision-parsing path. Both are additive and never block the import if
+    # they fail - traceability is a bonus, not a requirement to see your
+    # imported test cases.
+    traceability = None
+    traceability_error = None
+    requirements_text = ""
+    if requirements_file is not None and requirements_file.filename:
+        req_raw = await requirements_file.read()
+        if req_raw and len(req_raw) > MAX_DOC_BYTES:
+            traceability_error = f"Your requirements file is too large (max {MAX_DOC_BYTES // (1024*1024)} MB) - traceability was skipped, but your test cases were still processed below."
+        elif req_raw:
+            if not _validate_upload(requirements_file.filename, req_raw):
+                traceability_error = "The requirements file didn't look like a valid document - traceability was skipped, but your test cases were still processed below."
+            else:
+                try:
+                    requirements_text = extract_text(requirements_file.filename, req_raw)
+                except Exception:
+                    traceability_error = "Your requirements file couldn't be read - traceability was skipped, but your test cases were still processed below."
+
+    diagram_notes = ""
+    diagram_files = [f for f in diagram_files if f.filename]
+    if len(diagram_files) > MAX_DIAGRAM_FILES:
+        diagram_files = diagram_files[:MAX_DIAGRAM_FILES]
+        traceability_error = (traceability_error or "") + f" Only the first {MAX_DIAGRAM_FILES} diagram files were used."
+    if diagram_files and requirements_text.strip():
+        diagram_reads = [(f.filename, await f.read()) for f in diagram_files]
+        diagram_reads = [(n, b) for n, b in diagram_reads if b and len(b) <= MAX_IMAGE_BYTES]
+        if diagram_reads:
+            try:
+                flow = parse_flow_diagrams(application, diagram_reads, api_key)
+                steps_desc = "; ".join(
+                    f"{s.get('step_id','')}: {s.get('description','')}" for s in flow.get("steps", [])
+                )
+                if steps_desc:
+                    diagram_notes = f"\n\nAdditional process flow read from attached diagram(s):\n{steps_desc}"
+            except Exception:
+                traceability_error = (traceability_error or "") + " The attached diagram(s) couldn't be read and were skipped for traceability."
+
+    if requirements_text.strip():
+        try:
+            traceability = match_requirements_to_test_cases(
+                application, requirements_text + diagram_notes, parsed_cases, api_key
+            )
+        except Exception:
+            traceability_error = (traceability_error or "") + " The traceability check couldn't be completed - your test cases were still processed below."
+
+    rl.finish("ok", {"parser_path": parser_path, "test_case_count": len(parsed_cases), "traceability_attempted": requirements_text.strip() != ""})
 
     pending_dir = IMPORT_PENDING_DIR / run_id
     pending_dir.mkdir(parents=True, exist_ok=True)
@@ -1358,13 +1440,22 @@ async def import_tests(
         "client_name": client_name,
         "application": application,
         "initials": initials,
-        "source_filename": test_cases_file.filename,
+        "source_filename": ", ".join(name for name, _ in reads),
         "parse_notes": parse_notes,
         "test_cases": parsed_cases,
+        "traceability": traceability,
     }))
 
     return templates.TemplateResponse(request, "review_import.html",
-        {"run_id": run_id, "application": application, "parse_notes": parse_notes, "test_cases": parsed_cases},
+        {
+            "run_id": run_id,
+            "application": application,
+            "parse_notes": parse_notes,
+            "test_cases": parsed_cases,
+            "traceability": traceability,
+            "traceability_error": traceability_error,
+            "hide_trial_cta": True,
+        },
     )
 
 
@@ -1421,7 +1512,7 @@ async def confirm_import(request: Request, run_id: str):
     shutil.rmtree(IMPORT_PENDING_DIR / run_id, ignore_errors=True)
 
     return templates.TemplateResponse(request, "import_result.html",
-        {"run_id": run_id, "application": pending["application"], "total_tcs": len(confirmed_cases)},
+        {"run_id": run_id, "application": pending["application"], "total_tcs": len(confirmed_cases), "hide_trial_cta": True},
     )
 
 
@@ -1459,6 +1550,7 @@ async def execute_select(request: Request, run_id: str):
             "test_cases": test_cases,
             "max_selectable": MAX_TEST_CASES_PER_EXECUTION,
             "error": None,
+            "hide_trial_cta": True,
         },
     )
 
@@ -1487,6 +1579,7 @@ async def execute_run(
             {
                 "run_id": run_id, "application": application,
                 "test_cases": test_cases or [], "max_selectable": MAX_TEST_CASES_PER_EXECUTION, "error": msg,
+                "hide_trial_cta": True,
             },
             status_code=code,
         )
@@ -1832,7 +1925,7 @@ async def _run_execution_batch_impl(
         "result_page": {
             "run_id": run_id, "exec_id": exec_id, "application": application,
             "role_label": role_label, "module": module, "environment_label": env_label,
-            "download_token": exec_token, **summary_counts,
+            "download_token": exec_token, "hide_trial_cta": True, **summary_counts,
         },
     })
 
@@ -1880,6 +1973,7 @@ async def execute_status_page(request: Request, run_id: str, exec_id: str, token
         {
             "run_id": run_id, "exec_id": exec_id, "token": token,
             "total": status.get("total", 0), "completed": status.get("completed", 0),
+            "hide_trial_cta": True,
         },
     )
 
@@ -2032,6 +2126,7 @@ async def history_lookup(request: Request, access_code: str = Form(...), initial
         {
             "error": None, "entries": rows, "my_entries": my_rows,
             "initials": initials, "show_mine_default": show_mine_default,
+            "hide_trial_cta": True,
         },
     )
 
