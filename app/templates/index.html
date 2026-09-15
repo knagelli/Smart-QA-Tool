@@ -122,8 +122,48 @@
     </div>
   </header>
 
-  <section class="pricing-callout" id="pricing">
-    <strong>How pricing works:</strong> based on your test scope and how much live execution you need &mdash; not a flat subscription. <a href="mailto:kalyan@req2qa.com?subject=Access%20request%20-%20Req2QA&amp;body=Company%3A%20%0AWhat%20you%20are%20testing%20(platform%2Fapp)%3A%20%0ARough%20timeline%3A%20%0A">Tell us what you're testing</a> and we'll quote a fair price.
+  <!-- Time & cost calculator - estimates the cost of the CURRENT manual
+       process from numbers the visitor enters, not Req2QA's own price, so
+       it stays compatible with the quote-only pricing decision while still
+       making a concrete case. See claude/visual-consistency-type-scale-
+       plan-2026-09-15.md for the reasoning. -->
+  <section class="calc-band" id="calculator">
+    <h2 class="about-title">See what manual test writing is costing you today</h2>
+    <p class="intro-lede">A rough, honest estimate based on your own numbers &mdash; not a sales pitch. Adjust anything below.</p>
+    <div class="card calc-card form">
+      <div class="calc-inputs">
+        <label>Test cases per release cycle
+          <input type="number" id="calc-tc" value="30" min="1" max="2000">
+        </label>
+        <label>Minutes to write one test case manually
+          <input type="number" id="calc-min" value="40" min="1" max="600">
+        </label>
+        <label>Release / test cycles per month
+          <input type="number" id="calc-cycles" value="2" min="1" max="30">
+        </label>
+        <label>Hourly rate for whoever writes them ($)
+          <input type="number" id="calc-rate" value="45" min="1" max="500">
+        </label>
+      </div>
+
+      <div class="calc-results">
+        <div class="card stat">
+          <div class="n" id="calc-out-hours">40</div>
+          <div class="l">hours/month writing test cases</div>
+        </div>
+        <div class="card stat">
+          <div class="n" id="calc-out-month">$1,800</div>
+          <div class="l">estimated cost/month</div>
+        </div>
+        <div class="card stat">
+          <div class="n" id="calc-out-year">$21,600</div>
+          <div class="l">estimated cost/year</div>
+        </div>
+      </div>
+
+      <a class="btn hero-cta-primary" id="calc-cta" href="mailto:kalyan@req2qa.com?subject=Access%20request%20-%20Req2QA&amp;body=Company%3A%20%0AWhat%20you%20are%20testing%20(platform%2Fapp)%3A%20%0A">Get a quote based on these numbers</a>
+      <p class="calc-note">This estimates only the manual effort you described above &mdash; it isn't Req2QA's price, which depends on your actual scope and is always quoted directly.</p>
+    </div>
   </section>
 
   <section class="intro-band" id="what-it-does">
@@ -312,6 +352,7 @@
 </div>
 <div id="initial-tab" data-active-tab="{{ active_tab or '' }}" hidden></div>
 <script src="/static/chooser.js"></script>
+<script src="/static/roi_calculator.js" defer></script>
 {% include "_footer.html" %}
 </body>
 </html>
