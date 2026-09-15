@@ -20,6 +20,8 @@
 {% include "_topbar.html" %}
 <div class="wrap wrap-wide">
   <header class="hdr">
+    <div class="hero-grid">
+    <div class="hero-copy">
     <p class="kicker">Req2QA &mdash; Requirements to Test Coverage</p>
     <h1 class="hero-headline">Turn your requirements into test coverage in minutes, not days.</h1>
     <div class="hero-flow">
@@ -71,6 +73,52 @@
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
         AI-drafted, human-reviewed &mdash; you stay in control
       </span>
+    </div>
+    </div>
+
+    <!-- Hero product visualization - a framed mockup of the actual report/
+         review screen, using entirely fabricated example content (no real
+         client data). Added so a first-time visitor sees what "review your
+         test cases" concretely looks like, instead of only reading about
+         it. Hidden on narrow viewports rather than stacked/shrunk, since a
+         squeezed mockup reads worse than no mockup at all on a phone. See
+         claude/visual-consistency-type-scale-plan-2026-09-15.md. -->
+    <div class="hero-visual" aria-hidden="true">
+      <div class="browser-frame">
+        <div class="browser-frame-bar">
+          <span class="browser-dot" style="background:#ED6A5E"></span>
+          <span class="browser-dot" style="background:#F4BF4F"></span>
+          <span class="browser-dot" style="background:#61C554"></span>
+          <span class="browser-frame-url">req2qa.com/result</span>
+        </div>
+        <div class="browser-frame-body">
+          <div class="mock-report-hdr">
+            <span class="mock-report-title">Acme Rostering &mdash; Test Coverage Report</span>
+            <span class="mock-report-count">14 test cases</span>
+          </div>
+          <div class="mock-tc-row">
+            <span class="mock-tc-id">TC-001</span>
+            <span class="mock-tc-title">Manager approves a submitted leave request</span>
+            <span class="mock-pill mock-pill-pass">PASS</span>
+          </div>
+          <div class="mock-tc-row">
+            <span class="mock-tc-id">TC-002</span>
+            <span class="mock-tc-title">Employee cannot submit overlapping shifts</span>
+            <span class="mock-pill mock-pill-pass">PASS</span>
+          </div>
+          <div class="mock-tc-row">
+            <span class="mock-tc-id">TC-003</span>
+            <span class="mock-tc-title">Roster publish notifies affected staff</span>
+            <span class="mock-pill mock-pill-blocked">BLOCKED</span>
+          </div>
+          <div class="mock-tc-row">
+            <span class="mock-tc-id">TC-004</span>
+            <span class="mock-tc-title">Timesheet rejects a negative hours entry</span>
+            <span class="mock-pill mock-pill-pass">PASS</span>
+          </div>
+        </div>
+      </div>
+    </div>
     </div>
   </header>
 
