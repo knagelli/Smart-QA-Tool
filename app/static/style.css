@@ -151,6 +151,14 @@ button:active,.btn:active{transform:scale(.98)}
    for a consistent, uniform feel across the whole site rather than the
    header scrolling out of view once you're past the hero. */
 .topbar{background:var(--cream-card);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:30}
+/* The topbar is sticky (position:sticky;top:0), so an in-page anchor link
+   (e.g. /about#how-it-works) scrolls its target flush to the very top of
+   the viewport, which lands it UNDER the topbar rather than below it -
+   the browser has no way to know a fixed/sticky element is covering that
+   space. scroll-margin-top reserves that space for any anchor target
+   site-wide, so every #id lands visibly below the topbar instead of
+   partially hidden behind it. See council review, 2026-09-15. */
+[id]{scroll-margin-top:84px}
 .topbar-inner{max-width:1040px;margin:0 auto;padding:16px 20px;display:flex;
   align-items:center;gap:28px}
 .topbar-brand{font-family:'Fraunces',Georgia,serif;font-weight:700;font-size:19px;
