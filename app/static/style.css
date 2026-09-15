@@ -347,7 +347,7 @@ button:active,.btn:active{transform:scale(.98)}
 .calc-results{display:flex;gap:18px;flex-wrap:wrap;padding:22px 0;margin-bottom:20px;
   border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
 .calc-results .card.stat{flex:1 1 140px;background:var(--sky);border:none;box-shadow:none;border-radius:14px}
-.calc-note{font-size:12px;color:var(--muted);margin-top:-8px;margin-bottom:20px}
+.calc-note{font-size:12px;color:var(--muted);margin-top:16px;margin-bottom:0}
 
 /* FAQ category grouping - subheadings above each cluster of existing
    <details> items, no change to the items themselves. */
