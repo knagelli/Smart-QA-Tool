@@ -130,6 +130,9 @@ button:active,.btn:active{transform:scale(.98)}
 .alert-info{background:var(--sky);color:var(--blue)}
 .alert-warn{background:#F6ECD6;color:#8A5A1E}
 .step-card{border:1px solid var(--border);border-radius:14px;padding:16px 18px;margin-bottom:16px;background:#FDFBF4}
+.trace-table{width:100%;border-collapse:collapse;margin-top:10px}
+.trace-table th,.trace-table td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border);font-size:13.5px;vertical-align:top}
+.trace-table th{background:#F6ECD6}
 .step-card-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
 .step-card-hdr .step-id{font-family:monospace;font-size:12px;color:var(--blue);font-weight:700}
 .keep-toggle{display:flex;align-items:center;gap:6px;font-weight:600;margin-bottom:0}
@@ -170,13 +173,6 @@ button:active,.btn:active{transform:scale(.98)}
     top:100%;left:0;right:0;background:var(--cream-card);
     border-bottom:1px solid var(--border);padding:16px 20px;gap:14px;z-index:20}
   .topbar-inner{justify-content:space-between}
-  /* Two full CTA buttons plus the hamburger toggle crowd a narrow phone
-     screen - keep only the primary Start Free Trial button visible.
-     "Get Started" just scrolls to the tool chooser further down the same
-     homepage, so it's still reachable by scrolling once on that page;
-     the trial link is also duplicated inside .topbar-nav for the open
-     mobile menu. */
-  .topbar-inner > a.btn.secondary.topbar-cta{display:none}
 }
 
 .site-ftr{background:var(--navy);color:#EDEFE9;margin-top:64px}
