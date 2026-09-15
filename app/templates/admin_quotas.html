@@ -1,0 +1,75 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Req2QA — Client Quotas</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background:#f4f6f5; margin:0; padding:2rem; color:#1a1a1a; }
+    h1 { font-size:1.3rem; }
+    h2 { font-size:1.05rem; margin-top:2rem; }
+    p.muted { color:#777; font-size:0.85rem; }
+    table { width:100%; border-collapse:collapse; background:#fff; border-radius:8px; overflow:hidden; }
+    th, td { text-align:left; padding:0.7rem 1rem; border-bottom:1px solid #eee; font-size:0.88rem; vertical-align:top; }
+    th { background:#eef2f0; }
+    code { background:#f0f0f0; padding:0.15rem 0.4rem; border-radius:4px; }
+    .empty { padding:2rem; text-align:center; color:#777; background:#fff; border-radius:8px; }
+    .over-ceiling { color:#b3261e; font-weight:600; }
+    .near-ceiling { color:#a06a00; font-weight:600; }
+    .reset-btn { background:#555; color:#fff; border:none; border-radius:6px; padding:0.35rem 0.7rem; font-size:0.8rem; cursor:pointer; }
+    form.set-form { background:#fff; border-radius:8px; padding:1rem 1.2rem; max-width:480px; }
+    form.set-form label { display:block; margin-bottom:0.6rem; font-size:0.85rem; }
+    form.set-form input { width:100%; padding:0.4rem; margin-top:0.2rem; box-sizing:border-box; }
+    form.set-form button { margin-top:0.4rem; padding:0.5rem 1rem; }
+  </style>
+</head>
+<body>
+  <h1>Client Quotas</h1>
+  <p class="muted">
+    A client with no quota row here can generate without any restriction (fail-open default for
+    legacy/unconfigured clients). Setting a quota turns on enforcement: generation is blocked once
+    EITHER 5 attempts OR 1.5x the subscribed count of kept test cases is reached, whichever comes
+    first. "Consumed" is permanent once a client keeps/downloads a generated set - it never
+    decreases.
+  </p>
+
+  {% if quotas %}
+  <table>
+    <tr><th>Client</th><th>Access code</th><th>Subscribed</th><th>Consumed</th><th>Ceiling (1.5x)</th><th>Attempts</th><th>Updated</th><th></th></tr>
+    {% for q in quotas %}
+    {% set ceiling = q.subscribed_count * 1.5 %}
+    <tr>
+      <td>{{ q.client_name }}</td>
+      <td><code>{{ q.access_code }}</code></td>
+      <td>{{ q.subscribed_count }}</td>
+      <td class="{% if q.consumed_count >= ceiling %}over-ceiling{% elif q.consumed_count >= q.subscribed_count %}near-ceiling{% endif %}">{{ q.consumed_count }}</td>
+      <td>{{ ceiling }}</td>
+      <td>{{ q.attempt_count }}/5</td>
+      <td>{{ q.updated_at }}</td>
+      <td>
+        <form method="post" action="/admin/quotas/reset-attempts" style="margin:0">
+          <input type="hidden" name="access_code" value="{{ q.access_code }}">
+          <button type="submit" class="reset-btn" title="Resets only the attempt counter, not consumed count.">Reset attempts</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <div class="empty">No quotas configured yet — all access codes are currently unrestricted.</div>
+  {% endif %}
+
+  <h2>Set / update a quota</h2>
+  <form class="set-form" method="post" action="/admin/quotas/set">
+    <label>Client name
+      <input type="text" name="client_name" required>
+    </label>
+    <label>Access code
+      <input type="text" name="access_code" required>
+    </label>
+    <label>Subscribed test case count
+      <input type="number" name="subscribed_count" min="1" required>
+    </label>
+    <button type="submit">Save</button>
+  </form>
+</body>
+</html>

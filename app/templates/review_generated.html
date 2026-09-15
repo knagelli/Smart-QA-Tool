@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<title>Req2QA — Review Generated Test Cases</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+{% include "_topbar.html" %}
+<div class="wrap wrap-wide">
+  <header class="hdr">
+    <h1>Review Your Generated Test Cases</h1>
+    <p class="sub">{{ application }} &bull; {{ test_cases|length }} test case(s) generated</p>
+  </header>
+
+  <div class="alert alert-info">
+    Uncheck anything you don't consider valid or usable before confirming — only the test cases
+    you keep below count toward your engagement. You can send this list to a business SME for
+    sign-off before confirming; nothing is billed and no live execution happens until you submit
+    this form.
+  </div>
+
+  {% if quota_note %}
+  <div class="alert alert-warn">{{ quota_note }}</div>
+  {% endif %}
+
+  {% if error %}
+  <div class="alert alert-error">{{ error }}</div>
+  {% endif %}
+
+  <form class="card form" action="/confirm-generated/{{ run_id }}" method="post">
+    <label>Your access code
+      <input type="text" name="access_code" required autocomplete="off">
+    </label>
+
+    {% for tc in test_cases %}
+    <div class="step-card">
+      <div class="step-card-hdr">
+        <label class="keep-toggle">
+          <input type="checkbox" name="keep_{{ tc.tc_id }}" checked>
+          Keep this test case
+        </label>
+        <span class="step-id">{{ tc.tc_id }}</span>
+      </div>
+      <p><strong>{{ tc.title }}</strong></p>
+      {% if tc.precondition %}<p class="opt">Precondition: {{ tc.precondition }}</p>{% endif %}
+      <p class="opt">{{ tc.steps }}</p>
+      <p class="opt">Expected: {{ tc.expected_result }}</p>
+    </div>
+    {% endfor %}
+
+    <button type="submit">Confirm Kept Test Cases</button>
+  </form>
+
+  <p class="footnote"><a href="/">&larr; Start over</a></p>
+</div>
+{% include "_footer.html" %}
+</body>
+</html>
