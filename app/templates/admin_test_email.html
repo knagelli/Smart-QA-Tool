@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Req2QA — Test Email</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background:#f4f6f5; display:flex; align-items:center; justify-content:center; min-height:100vh; margin:0; }
+    .box { background:#fff; padding:2rem 2.5rem; border-radius:10px; box-shadow:0 2px 12px rgba(0,0,0,0.08); width:380px; }
+    h1 { font-size:1.1rem; margin:0 0 0.5rem; }
+    p.sub { color:#666; font-size:0.85rem; margin:0 0 1rem; }
+    input[type=email] { width:100%; padding:0.6rem; margin:0.5rem 0 1rem; border:1px solid #ccc; border-radius:6px; box-sizing:border-box; }
+    button { width:100%; padding:0.6rem; background:#1c5c46; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:1rem; }
+    .status { font-size:0.9rem; margin-bottom:0.75rem; padding:0.5rem 0.75rem; border-radius:6px; }
+    .status-ok { background:#e6f4ea; color:#1c5c46; }
+    .status-fail { background:#fbe9e7; color:#b3261e; }
+    .warn { font-size:0.8rem; color:#b3261e; margin-bottom:0.75rem; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>Send a Test Email</h1>
+    <p class="sub">Sends from support@req2qa.com via the configured SMTP relay. Use this to confirm the mailer is wired up correctly.</p>
+    {% if not configured %}
+    <div class="warn">SMTP_USER / SMTP_PASS are not set in this environment — sending will fail until both are configured in Render.</div>
+    {% endif %}
+    {% if result %}
+    <div class="status {{ 'status-ok' if ok else 'status-fail' }}">{{ result }}</div>
+    {% endif %}
+    <form method="post" action="/admin/test-email">
+      <label for="to_addr">Send test email to</label>
+      <input type="email" id="to_addr" name="to_addr" placeholder="you@example.com" required autofocus>
+      <button type="submit">Send test email</button>
+    </form>
+  </div>
+</body>
+</html>
