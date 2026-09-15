@@ -354,3 +354,65 @@ def structure_existing_test_cases(application: str, raw_text: str, api_key: str)
 
     raw = "".join(block.text for block in resp.content if block.type == "text")
     return _parse_json_response(raw)
+
+
+TRACEABILITY_SYSTEM_PROMPT = (
+    "You match client-supplied test cases against a requirements document to build a "
+    "best-effort traceability matrix. This is inherently heuristic, not deterministic - "
+    "the test cases were never written with requirement IDs attached, so you are inferring "
+    "a likely match, not verifying a ground truth. Be conservative: mark a requirement as "
+    "covered only if a test case plausibly, substantively addresses it. When genuinely "
+    "unsure, mark it uncovered rather than guessing a match - a false 'covered' is worse "
+    "than an honest 'not sure'. Never invent test cases or requirements that aren't present."
+)
+
+TRACEABILITY_PROMPT_TEMPLATE = """REQUIREMENTS DOCUMENT for "{application}":
+{requirements_text}
+
+CLIENT-SUPPLIED TEST CASES (already written, do not modify or improve them):
+{test_cases_json}
+
+For each requirement, identify which of the above test case IDs (if any) plausibly cover
+it. A requirement can be covered by zero, one, or multiple test cases. A test case can
+cover more than one requirement.
+
+Respond with ONLY this JSON object (no other text):
+{{
+  "validation": [
+    {{"req_id": "REQ-001", "requirement": "<verbatim or lightly cleaned requirement text>", "matched_tc_ids": ["TC-001"], "covered": true}}
+  ]
+}}
+"""
+
+
+def match_requirements_to_test_cases(application: str, requirements_text: str, test_cases: list, api_key: str) -> dict:
+    """Best-effort traceability matrix for tier 3 (bring-your-own test cases):
+    matches a client's already-written test cases against their requirements
+    document. Unlike run_qa_analysis's req_id linkage (which the model assigns
+    itself as it writes each case, so it's deterministic by construction),
+    this is inferring a match after the fact for cases we never wrote - it is
+    a genuinely heuristic best-effort pass, not an authoritative result, and
+    must always be presented to the client with that caveat (see
+    review_import.html)."""
+    client = Anthropic(api_key=api_key)
+
+    tc_summary = [
+        {"tc_id": tc.get("tc_id", ""), "title": tc.get("title", ""), "steps": tc.get("steps", "")[:500]}
+        for tc in test_cases
+    ]
+    prompt = TRACEABILITY_PROMPT_TEMPLATE.format(
+        application=application.strip(),
+        requirements_text=requirements_text.strip()[:100000],
+        test_cases_json=json.dumps(tc_summary),
+    )
+
+    resp = client.messages.create(
+        model=MODEL,
+        max_tokens=8000,
+        temperature=0,
+        system=TRACEABILITY_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    raw = "".join(block.text for block in resp.content if block.type == "text")
+    return _parse_json_response(raw)
