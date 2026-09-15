@@ -43,7 +43,7 @@ body{font-family:'Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,s
 .card{background:var(--cream-card);border:1px solid var(--border);border-radius:18px;padding:28px;
   box-shadow:0 1px 3px rgba(43,58,42,.05)}
 .form label{display:block;font-size:13.5px;font-weight:600;color:var(--muted);margin-bottom:18px}
-.form input[type=text],.form input[type=password],.form input[type=file],.form input[type=email]{
+.form input[type=text],.form input[type=password],.form input[type=file],.form input[type=email],.form input[type=number]{
   display:block;width:100%;margin-top:6px;padding:11px 14px;border:1px solid var(--border);
   border-radius:10px;font-size:13.5px;font-family:inherit;background:#fff}
 .form input:focus,.form textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
@@ -237,7 +237,13 @@ button:active,.btn:active{transform:scale(.98)}
 .mock-tc-row{display:flex;align-items:center;gap:10px;padding:9px 0;
   border-bottom:1px solid #F1EEE1;font-size:11.5px}
 .mock-tc-row:last-child{border-bottom:none}
-.mock-tc-id{font-family:monospace;color:var(--blue);font-weight:700;flex:0 0 auto}
+/* Deliberately NOT font-family:monospace here (unlike .step-card-hdr .step-id
+   elsewhere) - in a small polished hero mockup, a browser-default monospace
+   font reads as a jarring third typeface next to Inter/Fraunces, which is
+   exactly the inconsistency this mockup was meant to fix, not add to. Kept
+   in the site's one type system instead, differentiated by weight/color/
+   letter-spacing rather than typeface. */
+.mock-tc-id{font-family:inherit;letter-spacing:.02em;color:var(--blue);font-weight:700;flex:0 0 auto}
 .mock-tc-title{color:var(--text);flex:1 1 auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mock-pill{flex:0 0 auto;font-size:10px;font-weight:700;padding:3px 9px;border-radius:999px}
 .mock-pill-pass{background:#DCFCE7;color:#15803D}
@@ -325,6 +331,23 @@ button:active,.btn:active{transform:scale(.98)}
   margin-bottom:32px;font-size:13.5px;color:var(--text);line-height:1.6}
 .pricing-callout strong{color:var(--navy)}
 .pricing-callout a{color:var(--blue);font-weight:600}
+
+/* Time & cost calculator - deliberately reuses existing shared classes
+   (.card, .form label/input, .card.stat .n/.l) rather than introducing new
+   font sizes/styles, per the standing lesson from the batch-d5 monospace
+   miss. Estimates the COST OF THE STATUS QUO (manual test-case writing)
+   from numbers the visitor enters - never Req2QA's own price - so it stays
+   compatible with the site's quote-only pricing decision while still
+   making a concrete, personal, numeric case. See
+   claude/visual-consistency-type-scale-plan-2026-09-15.md. */
+.calc-band{margin-bottom:40px}
+.calc-card{padding:30px}
+.calc-inputs{display:grid;grid-template-columns:1fr 1fr;gap:0 24px;margin-bottom:26px}
+@media (max-width:560px){.calc-inputs{grid-template-columns:1fr}}
+.calc-results{display:flex;gap:18px;flex-wrap:wrap;padding:22px 0;margin-bottom:20px;
+  border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+.calc-results .card.stat{flex:1 1 140px;background:var(--sky);border:none;box-shadow:none;border-radius:14px}
+.calc-note{font-size:12px;color:var(--muted);margin-top:-8px;margin-bottom:20px}
 
 /* FAQ category grouping - subheadings above each cluster of existing
    <details> items, no change to the items themselves. */
