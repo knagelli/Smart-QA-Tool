@@ -344,9 +344,9 @@
     <p class="mode-desc">
       We check each requirement against what's known to work well on well-established platforms.
     </p>
-    <form class="card form" action="/analyze" method="post" enctype="multipart/form-data">
+    <form class="card form" id="analyze-form" action="/analyze" method="post" enctype="multipart/form-data">
       <label>Access code
-        <input type="password" name="access_code" required placeholder="Provided by your account manager">
+        <input type="password" name="access_code" id="analyze-access-code" required placeholder="Provided by your account manager">
       </label>
 
       <label>Application under test
@@ -363,7 +363,8 @@
         <span class="hint">Stamped onto this run's report so a later re-run is distinguishable.</span>
       </label>
 
-      <label>Test data for custom workflows <span class="opt">(optional)</span>
+      <label id="client-test-data-field">
+        Test data for custom workflows <span class="opt">(optional)</span>
         <textarea name="client_test_data" rows="3" placeholder="employee: employee_id=E-0452, full_name=Test Offboardee, status=terminated"></textarea>
         <span class="hint">
           Some requirements describe a workflow around a data state we can't create ourselves in one run
@@ -374,6 +375,30 @@
           &mdash; we only need something the right shape and status, not the genuine record.
         </span>
       </label>
+      <script>
+        // Free-trial access codes are always "TRIAL-..." (see
+        // app/trial_signups.py's create_signup) - trial generation can never
+        // reach live execution (_check_access_no_trial in main.py rejects
+        // trial codes outright), so this field is functionally inert for a
+        // trial run. Hiding it is a presentation choice only (a founder call
+        // to keep the trial experience simpler), not a security control -
+        // the server independently discards this field for trial codes
+        // regardless of what's submitted (see /analyze in main.py), so
+        // nothing depends on this JS actually running or being bypassed.
+        (function () {
+          var codeInput = document.getElementById("analyze-access-code");
+          var field = document.getElementById("client-test-data-field");
+          var textarea = field ? field.querySelector("textarea") : null;
+          if (!codeInput || !field || !textarea) return;
+          function sync() {
+            var isTrial = codeInput.value.trim().toUpperCase().startsWith("TRIAL-");
+            field.hidden = isTrial;
+            if (isTrial) textarea.value = "";
+          }
+          codeInput.addEventListener("input", sync);
+          sync();
+        })();
+      </script>
 
       <label>Your name or initials <span class="opt">(optional)</span>
         <input type="text" name="initials" maxlength="40" placeholder="e.g. JD">
