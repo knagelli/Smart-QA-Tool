@@ -20,7 +20,13 @@
     CA: 78,
     NZ: 38,
     IE: 58,
-    SG: 116
+    // SG corrected 2026-09-16: the original figure (116) was derived from a
+    // contractor/consulting rate-card source, not a real employee salary
+    // benchmark - it was an outlier vs. the other six countries, all of
+    // which used actual job-market salary data. Redone from real job-board
+    // averages (JobStreet: SGD 3,800-5,100/mo; Indeed: SGD 4,726/mo),
+    // giving a materially lower and more consistent figure.
+    SG: 44
   };
 
   if (country) {
