@@ -45,7 +45,11 @@ body{font-family:'Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,s
 .form label{display:block;font-size:13.5px;font-weight:600;color:var(--muted);margin-bottom:18px}
 .form input[type=text],.form input[type=password],.form input[type=file],.form input[type=email],.form input[type=number]{
   display:block;width:100%;margin-top:6px;padding:11px 14px;border:1px solid var(--border);
-  border-radius:10px;font-size:13.5px;font-family:inherit;background:#fff}
+  /* font-size held at 16px (not the 13.5px used elsewhere in this form) -
+     iOS Safari auto-zooms the page on focus for any text input under 16px,
+     which is what caused the "site doesn't render properly on iPhone"
+     report; 16px is the threshold that keeps it from triggering. */
+  border-radius:10px;font-size:16px;font-family:inherit;background:#fff}
 .form input:focus,.form textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
 .form .hint{display:block;font-weight:400;font-size:12px;color:var(--muted);margin-top:4px}
 /* Primary action color - reserved for buttons/CTAs only, distinct from the
@@ -132,7 +136,8 @@ button:active,.btn:active{transform:scale(.98)}
 .mode-pill{display:inline-block;margin-top:8px;font-size:11px;font-weight:600;background:var(--sky);
   color:var(--blue);padding:3px 10px;border-radius:20px}
 .form textarea{display:block;width:100%;margin-top:6px;padding:11px 14px;border:1px solid var(--border);
-  border-radius:10px;font-size:13.5px;font-family:inherit;resize:vertical;background:#fff}
+  /* Same 16px floor as the input rule above, same iOS Safari zoom reason. */
+  border-radius:10px;font-size:16px;font-family:inherit;resize:vertical;background:#fff}
 .form .opt{font-weight:400;color:var(--muted)}
 .form label.inline-check{display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-weight:600}
 .form label.inline-check input{margin:0}
