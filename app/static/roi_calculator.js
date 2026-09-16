@@ -3,7 +3,35 @@
   var min = document.getElementById("calc-min");
   var cycles = document.getElementById("calc-cycles");
   var rate = document.getElementById("calc-rate");
+  var country = document.getElementById("calc-country");
   if (!tc || !min || !cycles || !rate) return; // section not on this page
+
+  // Suggested hourly rate per country, in AUD - a general industry-benchmark
+  // starting point, not a precise figure. Derived from published median
+  // salary/contractor-rate benchmarks per country (checked 2026-09-16),
+  // converted to AUD at that day's approximate exchange rate. Both the
+  // underlying benchmark and the exchange rate drift over time, so this is
+  // meant only as an editable starting point for the visitor, never a fixed
+  // truth - the field stays editable regardless of country chosen.
+  var COUNTRY_RATES_AUD = {
+    AU: 45,
+    US: 49,
+    UK: 65,
+    CA: 78,
+    NZ: 38,
+    IE: 58,
+    SG: 116
+  };
+
+  if (country) {
+    country.addEventListener("change", function () {
+      var suggested = COUNTRY_RATES_AUD[country.value];
+      if (suggested) {
+        rate.value = suggested;
+        recalc();
+      }
+    });
+  }
 
   var outHours = document.getElementById("calc-out-hours");
   var outMonth = document.getElementById("calc-out-month");
