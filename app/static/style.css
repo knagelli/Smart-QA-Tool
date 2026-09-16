@@ -183,9 +183,12 @@ button:active,.btn:active{transform:scale(.98)}
 [id]{scroll-margin-top:84px}
 .topbar-inner{max-width:1040px;margin:0 auto;padding:16px 20px;display:flex;
   align-items:center;gap:28px}
-.topbar-brand{font-family:'Fraunces',Georgia,serif;font-weight:700;font-size:19px;
-  color:var(--navy);text-decoration:none;letter-spacing:-.01em}
-.topbar-brand span{color:var(--blue)}
+.topbar-brand{display:inline-flex;align-items:center;text-decoration:none}
+/* height set inline on the <img> (24px) for the pre-CSS-load intrinsic size;
+   keep this in sync if that changes. Logo carries its own (TM) mark - see
+   app/static/logo.svg - since the trade mark application (TM Headstart,
+   Class 42) is pending, not yet registered; do not swap to (R). */
+.topbar-logo-img{display:block;height:24px;width:auto}
 .topbar-nav{display:flex;gap:22px;flex:1}
 .topbar-nav a{color:var(--text);text-decoration:none;font-size:13.5px;font-weight:600}
 .topbar-nav a:hover{color:var(--blue)}
@@ -210,8 +213,8 @@ button:active,.btn:active{transform:scale(.98)}
   display:grid;grid-template-columns:1.6fr 1fr 1fr 1fr;gap:32px}
 @media (max-width:720px){.site-ftr-inner{grid-template-columns:1fr 1fr}}
 @media (max-width:460px){.site-ftr-inner{grid-template-columns:1fr}}
-.site-ftr-logo{font-family:'Fraunces',Georgia,serif;font-weight:700;font-size:18px;color:#fff}
-.site-ftr-logo span{color:#9FC98A}
+.site-ftr-logo{display:block}
+.site-ftr-logo-img{display:block;height:22px;width:auto}
 .site-ftr-tag{font-size:12px;color:#B9C2AE;margin-top:6px;letter-spacing:.03em;text-transform:uppercase}
 .site-ftr-trust{font-size:12px;color:#C7CEBB;margin-top:16px;line-height:1.6;max-width:32ch}
 .site-ftr-col h4{font-size:12px;color:#9FA98F;text-transform:uppercase;letter-spacing:.06em;
