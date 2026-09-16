@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<title>Req2QA — Requirements to Test Coverage</title>
+<meta name="description" content="Req2QA turns your requirements documents into validated test scenarios, a traceability matrix, and optional live test execution &mdash; built for teams without a dedicated automation engineer.">
+<meta property="og:title" content="Req2QA — Requirements to Test Coverage">
+<meta property="og:description" content="Turn your requirements into test coverage in minutes, not days. Generation, traceability, and optional live execution against your own sandbox/UAT environment.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://req2qa.com/">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<noscript><style>#chooser{display:none} .tab-panel{display:block !important}</style></noscript>
+{% include "_topbar.html" %}
+<div class="wrap wrap-wide">
+  <header class="hdr">
+    <div class="hero-grid">
+    <div class="hero-copy">
+    <p class="kicker">Req2QA &mdash; Requirements to Test Coverage</p>
+    <h1 class="hero-headline">Turn your requirements into test coverage in minutes, not days.</h1>
+    <div class="hero-flow">
+      <div class="flow-node">
+        <span class="flow-icon-badge">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13h6M9 17h6M9 9h1"/></svg>
+        </span>
+        <span class="flow-label">Requirements</span>
+      </div>
+      <span class="flow-arrow">&rarr;</span>
+      <div class="flow-node">
+        <span class="flow-icon-badge">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+        </span>
+        <span class="flow-label">Test Coverage</span>
+      </div>
+      <span class="flow-arrow">&rarr;</span>
+      <div class="flow-node">
+        <span class="flow-icon-badge">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+        </span>
+        <span class="flow-label">Live Execution</span>
+      </div>
+    </div>
+
+    <p class="platform-list">Works with Salesforce, Humanforce, SuccessFactors, Workday, and other web-based systems.</p>
+
+    <p class="no-code-line">No test scripts to write or maintain. If you can write a requirements document, you can get real test coverage.</p>
+
+    <div class="hero-cta-row">
+      <a class="btn hero-cta-primary" href="/trial-signup">Start Free Trial</a>
+      <a class="hero-cta-secondary" href="mailto:kalyan@req2qa.com?subject=Access%20request%20-%20Req2QA&amp;body=Company%3A%20%0AWhat%20you%20are%20testing%20(platform%2Fapp)%3A%20%0ARough%20timeline%3A%20%0A">Request a paid quote</a>
+      <a class="hero-cta-secondary" href="#chooser">Already have an access code? Jump to the tool &darr;</a>
+    </div>
+
+    <!-- Trust strip: same two facts already stated in security.html/
+         privacy.html prose, surfaced here as a visible credibility signal
+         instead of being buried on legal pages. -->
+    <div class="trust-strip">
+      <span class="trust-item">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+        Powered by Anthropic's Claude
+      </span>
+      <span class="trust-item">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+        Live execution against your own browser-based environment
+      </span>
+      <span class="trust-item">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+        AI-drafted, human-reviewed &mdash; you stay in control
+      </span>
+    </div>
+    </div>
+
+    <!-- Hero product visualization - a framed mockup of the actual report/
+         review screen, using entirely fabricated example content (no real
+         client data). Added so a first-time visitor sees what "review your
+         test cases" concretely looks like, instead of only reading about
+         it. Hidden on narrow viewports rather than stacked/shrunk, since a
+         squeezed mockup reads worse than no mockup at all on a phone. See
+         claude/visual-consistency-type-scale-plan-2026-09-15.md. -->
+    <div class="hero-visual" aria-hidden="true">
+      <div class="browser-frame">
+        <div class="browser-frame-bar">
+          <span class="browser-dot" style="background:#ED6A5E"></span>
+          <span class="browser-dot" style="background:#F4BF4F"></span>
+          <span class="browser-dot" style="background:#61C554"></span>
+          <div class="frame-tabs">
+            <button type="button" class="frame-tab active" data-panel="hero-panel-report">Test Report</button>
+            <button type="button" class="frame-tab" data-panel="hero-panel-trace">Traceability</button>
+            <button type="button" class="frame-tab" data-panel="hero-panel-gaps">Gaps</button>
+          </div>
+        </div>
+        <div class="browser-frame-body" id="hero-panel-report">
+          <div class="mock-report-hdr">
+            <span class="mock-report-title">Acme Rostering &mdash; Test Coverage Report</span>
+            <span class="mock-report-count">14 test cases</span>
+          </div>
+          <div class="mock-tc-row">
+            <span class="mock-tc-id">TC-001</span>
+            <span class="mock-tc-title">Manager approves a submitted leave request</span>
+            <span class="mock-pill mock-pill-pass">PASS</span>
+          </div>
+          <div class="mock-tc-row">
+            <span class="mock-tc-id">TC-002</span>
+            <span class="mock-tc-title">Employee cannot submit overlapping shifts</span>
+            <span class="mock-pill mock-pill-pass">PASS</span>
+          </div>
+          <div class="mock-tc-row">
+            <span class="mock-tc-id">TC-003</span>
+            <span class="mock-tc-title">Roster publish notifies affected staff</span>
+            <span class="mock-pill mock-pill-blocked">BLOCKED</span>
+          </div>
+          <div class="mock-tc-row">
+            <span class="mock-tc-id">TC-004</span>
+            <span class="mock-tc-title">Timesheet rejects a negative hours entry</span>
+            <span class="mock-pill mock-pill-pass">PASS</span>
+          </div>
+        </div>
+
+        <div class="browser-frame-body" id="hero-panel-trace" hidden>
+          <div class="mock-report-hdr">
+            <span class="mock-report-title">Acme Rostering &mdash; Requirements Traceability</span>
+            <span class="mock-report-count">4 requirements</span>
+          </div>
+          <div class="trace-row">
+            <span class="trace-req">REQ-01</span>
+            <span class="trace-desc">Managers can approve or reject leave requests</span>
+            <span class="trace-tcs">TC-001</span>
+            <span class="mock-pill mock-pill-pass">COVERED</span>
+          </div>
+          <div class="trace-row">
+            <span class="trace-req">REQ-02</span>
+            <span class="trace-desc">System prevents overlapping shift submissions</span>
+            <span class="trace-tcs">TC-002</span>
+            <span class="mock-pill mock-pill-pass">COVERED</span>
+          </div>
+          <div class="trace-row">
+            <span class="trace-req">REQ-03</span>
+            <span class="trace-desc">Affected staff are notified on roster publish</span>
+            <span class="trace-tcs">TC-003</span>
+            <span class="mock-pill mock-pill-partial">PARTIAL</span>
+          </div>
+          <div class="trace-row">
+            <span class="trace-req">REQ-04</span>
+            <span class="trace-desc">Timesheets reject negative hour entries</span>
+            <span class="trace-tcs">TC-004</span>
+            <span class="mock-pill mock-pill-pass">COVERED</span>
+          </div>
+        </div>
+
+        <div class="browser-frame-body" id="hero-panel-gaps" hidden>
+          <div class="mock-report-hdr">
+            <span class="mock-report-title">Acme Rostering &mdash; Gaps Found</span>
+            <span class="mock-report-count">2 flagged</span>
+          </div>
+          <div class="gap-row">
+            <div class="gap-hdr">
+              <span class="gap-title">Concurrent edits by two managers</span>
+              <span class="mock-pill mock-pill-gap">NOT SPECIFIED</span>
+            </div>
+            <span class="gap-note">Seen in the process flow (two manager roles can open the same roster) but no requirement says what should happen if both submit changes at once.</span>
+          </div>
+          <div class="gap-row">
+            <div class="gap-hdr">
+              <span class="gap-title">REQ-05 &mdash; &ldquo;system should handle errors gracefully&rdquo;</span>
+              <span class="mock-pill mock-pill-gap">AMBIGUOUS</span>
+            </div>
+            <span class="gap-note">No measurable pass/fail condition, so it can't be turned into a test case as written &mdash; needs a concrete definition of &ldquo;gracefully.&rdquo;</span>
+          </div>
+          <div class="gap-footnote">Gaps are drawn from what's actually in your documents &mdash; not guessed.</div>
+        </div>
+      </div>
+    </div>
+    </div>
+  </header>
+
+  <!-- Time & cost calculator - estimates the cost of the CURRENT manual
+       process from numbers the visitor enters, not Req2QA's own price, so
+       it stays compatible with the quote-only pricing decision while still
+       making a concrete case. See claude/visual-consistency-type-scale-
+       plan-2026-09-15.md for the reasoning. -->
+  <section class="calc-band" id="calculator">
+    <h2 class="about-title">See what manual test writing is costing you today</h2>
+    <p class="intro-lede">A rough, honest estimate based on your own numbers &mdash; not a sales pitch. Adjust anything below.</p>
+    <div class="card calc-card form">
+      <div class="calc-inputs">
+        <label>Test cases per release cycle
+          <input type="number" id="calc-tc" value="30" min="1" max="2000">
+        </label>
+        <label>Minutes to write one test case manually
+          <input type="number" id="calc-min" value="40" min="1" max="600">
+        </label>
+        <label>Release / test cycles per month
+          <input type="number" id="calc-cycles" value="2" min="1" max="30">
+        </label>
+        <label>Country (prefills a suggested rate below &mdash; optional)
+          <select id="calc-country">
+            <option value="">Choose a country&hellip;</option>
+            <option value="AU" selected>Australia</option>
+            <option value="US">United States</option>
+            <option value="UK">United Kingdom</option>
+            <option value="CA">Canada</option>
+            <option value="NZ">New Zealand</option>
+            <option value="IE">Ireland</option>
+            <option value="SG">Singapore</option>
+          </select>
+        </label>
+        <label>Hourly rate for whoever writes them (AUD)
+          <input type="number" id="calc-rate" value="45" min="1" max="500">
+          <span class="hint">Prefilled from general industry benchmark rates for the selected country, converted to AUD at an approximate, illustrative exchange rate &mdash; always editable, and actual rates vary by experience, market, and engagement type.</span>
+        </label>
+      </div>
+
+      <div class="calc-results">
+        <div class="card stat">
+          <div class="n" id="calc-out-hours">40</div>
+          <div class="l">hours/month writing test cases</div>
+        </div>
+        <div class="card stat">
+          <div class="n" id="calc-out-month">$1,800</div>
+          <div class="l">estimated cost/month</div>
+        </div>
+        <div class="card stat">
+          <div class="n" id="calc-out-year">$21,600</div>
+          <div class="l">estimated cost/year</div>
+        </div>
+      </div>
+
+      <a class="btn hero-cta-primary" id="calc-cta" href="mailto:kalyan@req2qa.com?subject=Access%20request%20-%20Req2QA&amp;body=Company%3A%20%0AWhat%20you%20are%20testing%20(platform%2Fapp)%3A%20%0A">Get a quote based on these numbers</a>
+      <p class="calc-note">This estimates only the manual effort you described above &mdash; it isn't Req2QA's price, which depends on your actual scope and is always quoted directly. All figures are shown in AUD; a country selection only prefills a suggested starting rate based on general industry benchmarks, converted using an approximate, illustrative exchange rate that moves over time &mdash; actual rates vary by experience, market, and engagement type, and the field is always yours to edit.</p>
+    </div>
+  </section>
+
+  <section class="intro-band" id="what-it-does">
+    <p class="intro-lede">Req2QA turns the requirements documents you already have into structured test coverage — automatically. Upload what you've got, and get back validated test scenarios and a full traceability matrix in under a minute, with optional live execution against your own sandbox/UAT environment.</p>
+    <p class="intro-contact"><a href="/about#how-it-works">See the full 3-step walkthrough &rarr;</a></p>
+  </section>
+
+  <section class="about-band" id="about">
+    <h2 class="about-title">About Req2QA</h2>
+    <p class="about-body">Req2QA is built and operated by Kalyan, an independent QA automation practitioner, for teams who need real, structured test coverage but don't have a dedicated automation engineer on staff.</p>
+    <p class="about-body"><a href="/about#about">Read more about Req2QA and the person behind it &rarr;</a></p>
+  </section>
+
+  <section class="faq-band" id="faq">
+    <h2 class="faq-title">Frequently asked questions</h2>
+
+    <div class="faq-group">
+      <p class="faq-group-title">Getting started</p>
+      <details class="faq-item">
+        <summary>Do I need a developer or automation experience to use this?</summary>
+        <p>No. Upload the documents you already have and follow the on-screen prompts &mdash; Req2QA handles the technical work of generating test coverage and, if you want it, running tests against your environment. You never write, read, or maintain a test script yourself.</p>
+      </details>
+
+      <details class="faq-item">
+        <summary>Should I trust AI-generated test cases?</summary>
+        <p>Think of it as hiring a fast, tireless junior tester &mdash; without the weeks it takes to recruit, onboard, and train one. Req2QA doesn't claim to be 100% accurate, and it doesn't remove the need for a human in the loop: every test case should be reviewed before you rely on it. What it does do is the time-consuming first pass to the best possible outcome, then hands it to you to approve, correct, or tick off &mdash; and because every test case is mapped back to the requirement it covers in a traceability matrix, you're reviewing targeted, mapped output rather than starting from scratch. Compare that to the actual cost of hiring a junior tester (recruiting, training, ramping up, and paying them to write the same coverage) &mdash; the time and money saved getting to "reviewed and approved" is the real value, not a claim of perfection.</p>
+      </details>
+
+      <details class="faq-item">
+        <summary>Can Req2QA test our custom-built (not off-the-shelf) application?</summary>
+        <p>Yes &mdash; Custom Application Mode reads a process-flow diagram and a short brief about your app, then confirms its understanding with you before generating anything.</p>
+      </details>
+    </div>
+
+    <div class="faq-group">
+      <p class="faq-group-title">Compatibility</p>
+      <details class="faq-item">
+        <summary>Does live execution work with every login and every application?</summary>
+        <p>Live execution works best with standard web applications using plain page structure and a standard username/password login. Some modern interfaces &mdash; particularly those built with heavily componentized, web-component-based frontends &mdash; can limit what our engine is currently able to see and interact with on a given screen. Applications that require hardware-token, smart-card, or biometric multi-factor login are also not currently supported, since there's no standard login step to automate &mdash; this is consistent with how other test-automation tools in the market handle these same login types today. As part of onboarding, we'll check your application's platform and login method with you first to confirm it's a good fit before any paid engagement begins.</p>
+      </details>
+    </div>
+
+    <div class="faq-group">
+      <p class="faq-group-title">Pricing</p>
+      <details class="faq-item">
+        <summary>What does this cost?</summary>
+        <p>Pricing is based on your test scope and how much live execution you need &mdash; not a flat subscription fee. <a href="mailto:kalyan@req2qa.com?subject=Access%20request%20-%20Req2QA&body=Company%3A%20%0AWhat%20you%20are%20testing%20(platform%2Fapp)%3A%20%0ARough%20timeline%3A%20%0A">Tell us what you're testing</a> and we'll quote a fair price for it.</p>
+      </details>
+    </div>
+
+    <div class="faq-group">
+      <p class="faq-group-title">Privacy &amp; security</p>
+      <details class="faq-item">
+        <summary>Is my data safe?</summary>
+        <p>Yes. Your credentials are used once, in memory, to run a live-execution test, and are never stored or logged. Uploaded documents are used only to generate your report and aren't retained afterward &mdash; only the resulting report is kept, and only for 7 days. Analysis is powered by a leading AI model, used solely to generate your report and never to train anyone else's model. See our <a href="/security">Security Overview</a> and <a href="/privacy">Privacy Policy</a> for the full detail.</p>
+      </details>
+
+      <details class="faq-item">
+        <summary>What happens to my uploaded documents?</summary>
+        <p>They're used only to generate your report and are not retained afterward. Only the resulting report and workbook are kept, for up to 7 days, reachable only via your private link &mdash; shown to you right after the run completes. Closed the tab before saving it? Look it up again anytime in <a href="/history">Run History</a> using your access code.</p>
+      </details>
+    </div>
+
+    <div class="faq-group">
+      <p class="faq-group-title">Considering your options</p>
+      <details class="faq-item">
+        <summary>Why not just build this myself with AI?</summary>
+        <p>You could &mdash; the same way you could build your own accounting software instead of buying one. What you're paying for isn't access to an AI model; anyone can get that. You're paying for the logic and sequencing already built and refined through hands-on testing against real-world requirements formats and live web applications &mdash; the weeks of trial and error it takes to get an AI agent to reliably read a spec, generate test cases that actually matter, map them to a traceability matrix, and drive a real browser through a live system without tripping over things like multi-step forms or toggle switches. Req2QA exists so you don't have to build and debug that yourself.</p>
+      </details>
+    </div>
+  </section>
+
+  <div class="narrow-inner">
+  {% if error %}
+  <div class="alert">{{ error }}</div>
+  {% endif %}
+
+  <!-- Step 1: plain-language choice. Nothing else is shown until one is picked,
+       so a non-technical user who was just told "use the custom option" sees
+       only two clearly-worded options and nothing to get lost in. -->
+  <div id="chooser">
+    <p class="chooser-intro">First, which best describes the application being tested?</p>
+    <div class="choice-cards">
+      <button type="button" class="choice-card" data-choose="named">
+        <span class="choice-icon-badge">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18h10a4 4 0 0 0 .5-7.97A5.5 5.5 0 0 0 7.1 9.5 4 4 0 0 0 7 18z"/></svg>
+        </span>
+        <span class="choice-title">An off-the-shelf online system</span>
+        <span class="choice-sub">e.g. Salesforce, Humanforce, SuccessFactors, Workday</span>
+        <span class="choice-detail">Fastest option — just upload your requirements document. No diagrams needed.</span>
+      </button>
+      <button type="button" class="choice-card accent-purple" data-choose="custom">
+        <span class="choice-icon-badge">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </span>
+        <span class="choice-title">A custom app built for us</span>
+        <span class="choice-sub">An in-house or bespoke system, not an off-the-shelf product</span>
+        <span class="choice-detail">A fuller setup — you'll also provide a process-flow diagram and a short brief.</span>
+      </button>
+    </div>
+    <p class="chooser-help">Not sure which one? Check with whoever asked you to run this, or use the off-the-shelf option if the application has its own public website you log into.</p>
+    <p class="footnote">Already have your own test cases written and just want to run them? <a href="/import-tests">Import &amp; execute test cases &rarr;</a></p>
+  </div>
+
+  <!-- Step 2a: off-the-shelf / named-platform form -->
+  <div class="tab-panel" id="tab-named" hidden>
+    <button type="button" class="back-link" data-back>&larr; Choose a different option</button>
+    <p class="mode-desc">
+      We check each requirement against what's known to work well on well-established platforms.
+    </p>
+    <form class="card form" action="/analyze" method="post" enctype="multipart/form-data">
+      <label>Access code
+        <input type="password" name="access_code" required placeholder="Provided by your account manager">
+      </label>
+
+      <label>Application under test
+        <input type="text" name="application" required placeholder="e.g. Salesforce Sales Cloud, Humanforce, SuccessFactors">
+      </label>
+
+      <label>Requirements document
+        <input type="file" name="requirements_file" required accept=".docx,.xlsx,.xlsm,.pdf,.txt,.csv">
+        <span class="hint">.docx, .xlsx/.xlsm, .pdf, .txt or .csv</span>
+      </label>
+
+      <label>Baseline / version label <span class="opt">(optional)</span>
+        <input type="text" name="baseline_version" placeholder="e.g. v1, Sprint 4 UAT">
+        <span class="hint">Stamped onto this run's report so a later re-run is distinguishable.</span>
+      </label>
+
+      <label>Your name or initials <span class="opt">(optional)</span>
+        <input type="text" name="initials" maxlength="40" placeholder="e.g. JD">
+        <span class="hint">Lets you filter to just your own runs later in <a href="/history">Run History</a> if your team shares one access code.</span>
+      </label>
+
+      <button type="submit">Run Validation &amp; Generate Test Scenarios</button>
+    </form>
+    <p class="footnote">Processing usually takes 20&ndash;60 seconds depending on document size.</p>
+    <p class="privacy-note">Your uploaded files are processed securely and are not stored — only the resulting report is kept, for 7 days, accessible via your secure link.</p>
+  </div>
+
+  <!-- Step 2b: custom application form -->
+  <div class="tab-panel" id="tab-custom" hidden>
+    <button type="button" class="back-link" data-back>&larr; Choose a different option</button>
+    <p class="mode-desc">
+      Since this app is custom-built, we read your process flow and brief to understand it
+      before generating anything. You'll review the extracted flow before test cases are
+      created. Web apps only (not native mobile or desktop apps).
+    </p>
+    <form class="card form" action="/analyze-custom" method="post" enctype="multipart/form-data">
+      <label>Access code
+        <input type="password" name="access_code" required placeholder="Provided by your account manager">
+      </label>
+
+      <label>Application name
+        <input type="text" name="application" required placeholder="e.g. Acme Internal Claims Portal">
+      </label>
+
+      <label>Project brief
+        <input type="file" name="brief_file" required accept=".docx,.xlsx,.xlsm,.pdf,.txt,.csv">
+        <span class="hint">Short context document — what the app does, who uses it.</span>
+      </label>
+
+      <label>Future-state process-flow diagram(s)
+        <input type="file" name="diagram_files" required multiple accept=".png,.jpg,.jpeg,.webp,.pdf">
+        <span class="hint">Visio/draw.io/BPMN export or a clear photo, as image(s) or PDF. You can select multiple pages/files.</span>
+      </label>
+
+      <label>Approved requirements document
+        <input type="file" name="requirements_file" required accept=".docx,.xlsx,.xlsm,.pdf,.txt,.csv">
+        <span class="hint">Already signed off — this run checks consistency/testability, not appropriateness.</span>
+      </label>
+
+      <label>Known element selectors / test-IDs <span class="opt">(optional)</span>
+        <textarea name="element_hints" rows="3" placeholder="e.g. #login-submit, [data-testid=approve-btn] on the Approval screen"></textarea>
+        <span class="hint">Improves execution reliability on critical screens if your developers have these. Never required.</span>
+      </label>
+
+      <label>Baseline / version label <span class="opt">(optional)</span>
+        <input type="text" name="baseline_version" placeholder="e.g. v1, Sprint 4 UAT">
+        <span class="hint">Stamped onto this run's report so a later re-run against an updated flow is distinguishable.</span>
+      </label>
+
+      <label>Your name or initials <span class="opt">(optional)</span>
+        <input type="text" name="initials" maxlength="40" placeholder="e.g. JD">
+        <span class="hint">Lets you filter to just your own runs later in <a href="/history">Run History</a> if your team shares one access code.</span>
+      </label>
+
+      <button type="submit">Parse Flow &amp; Review</button>
+    </form>
+    <p class="footnote">Next step: you'll confirm or correct the extracted process flow before any test cases are generated.</p>
+    <p class="privacy-note">Your uploaded files are processed securely and are not stored — only the resulting report is kept, for 7 days, accessible via your secure link.</p>
+  </div>
+  </div>
+</div>
+<div id="initial-tab" data-active-tab="{{ active_tab or '' }}" hidden></div>
+<script src="/static/chooser.js"></script>
+<script src="/static/roi_calculator.js" defer></script>
+<script src="/static/hero_tabs.js" defer></script>
+{% include "_footer.html" %}
+</body>
+</html>
