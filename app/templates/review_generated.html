@@ -29,6 +29,14 @@
   <div class="alert alert-warn">{{ quota_note }}</div>
   {% endif %}
 
+  {% if client_test_data_pii_flags %}
+  <div class="alert alert-warn">
+    The test data you supplied looks like it might contain {{ client_test_data_pii_flags | join(" and ") }}.
+    Please double-check it uses anonymized/placeholder values rather than a real person's actual details,
+    and resubmit if it doesn't.
+  </div>
+  {% endif %}
+
   {% if error %}
   <div class="alert alert-error">{{ error }}</div>
   {% endif %}

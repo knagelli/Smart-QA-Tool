@@ -363,6 +363,18 @@
         <span class="hint">Stamped onto this run's report so a later re-run is distinguishable.</span>
       </label>
 
+      <label>Test data for custom workflows <span class="opt">(optional)</span>
+        <textarea name="client_test_data" rows="3" placeholder="employee: employee_id=E-0452, full_name=Test Offboardee, status=terminated"></textarea>
+        <span class="hint">
+          Some requirements describe a workflow around a data state we can't create ourselves in one run
+          &mdash; e.g. testing against an employee who has already resigned and been offboarded, rather than one
+          we can create fresh. If your requirements include a scenario like that, list a record we can use here
+          (one per line, as <code>type: field=value, field=value</code>) so that scenario runs instead of being
+          skipped. <strong>Please use anonymized/placeholder values, never a real person's actual details</strong>
+          &mdash; we only need something the right shape and status, not the genuine record.
+        </span>
+      </label>
+
       <label>Your name or initials <span class="opt">(optional)</span>
         <input type="text" name="initials" maxlength="40" placeholder="e.g. JD">
         <span class="hint">Lets you filter to just your own runs later in <a href="/history">Run History</a> if your team shares one access code.</span>
