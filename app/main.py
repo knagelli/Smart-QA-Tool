@@ -752,6 +752,7 @@ async def analyze(
     requirements_file: UploadFile = File(...),
     baseline_version: str = Form(""),
     initials: str = Form(""),
+    client_test_data: str = Form(""),
 ):
     _sweep_completed_runs()
 
@@ -853,6 +854,15 @@ async def analyze(
     data["baseline_version"] = baseline_version.strip()
     data["initials"] = initials
 
+    # Client-supplied test data for custom workflows the automation cannot
+    # create itself in one run (e.g. an employee who has already resigned
+    # and been offboarded) - council-reviewed 2026-09-16, see
+    # claude/council-review-client-supplied-test-data-devils-advocate.md and
+    # app/fixtures.py. Scoped to this one run (not the cross-run registry);
+    # the PII heuristic only ever warns, never blocks.
+    data["client_test_data"] = fixtures.parse_client_seed_text(client_test_data)
+    data["client_test_data_pii_flags"] = fixtures.scan_for_pii_flags(client_test_data)
+
     total_reqs = len(data.get("validation", []))
     flagged = sum(1 for v in data.get("validation", []) if not v.get("valid_for_app"))
     total_tcs = len(data.get("test_scenarios", []))
@@ -884,6 +894,7 @@ async def analyze(
                 "application": application,
                 "test_cases": data.get("test_scenarios", []),
                 "quota_note": quota_note,
+                "client_test_data_pii_flags": data.get("client_test_data_pii_flags", []),
                 "error": None,
                 "hide_trial_cta": True,
             },
@@ -919,6 +930,7 @@ async def analyze(
             "flagged": flagged,
             "total_tcs": total_tcs,
             "baseline_version": data["baseline_version"],
+            "client_test_data_pii_flags": data.get("client_test_data_pii_flags", []),
             "hide_trial_cta": True,
         },
     )
@@ -1720,6 +1732,7 @@ async def execute_run(
         password=password, api_key=api_key, initials=initials,
         all_test_cases=all_test_cases, selected_ids=selected_ids,
         scheduled_ids=scheduled_ids, reuse_fixtures=reuse_fixtures,
+        client_fixtures=data.get("client_test_data", []),
         access_code=access_code, max_screenshots=max_screenshots_val,
     )
     return RedirectResponse(
@@ -1749,6 +1762,7 @@ async def _run_execution_batch_impl(
     module, env_url, env_host, username, password, api_key, initials,
     all_test_cases, selected_ids, scheduled_ids, reuse_fixtures,
     access_code=None, max_screenshots=DEFAULT_MAX_SCREENSHOTS_PER_TEST,
+    client_fixtures=None,
 ):
     """Runs one batch of live-execution test cases (moved out of the
     request/response cycle - see the Phase B redirect in execute_run above).
@@ -1821,6 +1835,17 @@ async def _run_execution_batch_impl(
         if role and role[0] == "requires":
             ftype = role[1]
             fixture = run_fixtures.get(ftype)
+            client_supplied = False
+            if fixture is None:
+                # Client-supplied data (attached to this run's requirements)
+                # satisfies a "requires:" scenario regardless of the reuse
+                # toggle - that toggle only ever governed *cross-run* reuse
+                # of records the automation itself created; a client
+                # explicitly supplying a record for this run is a different,
+                # always-on source. See app/fixtures.py and
+                # claude/council-review-client-supplied-test-data-devils-advocate.md.
+                fixture = fixtures.lookup_client_fixture(client_fixtures, ftype)
+                client_supplied = fixture is not None
             if fixture is None and reuse_fixtures:
                 fixture = fixtures.get_fresh_fixture(FIXTURES_DIR, application, env_host, ftype)
             if fixture is None:
@@ -1828,14 +1853,18 @@ async def _run_execution_batch_impl(
                 if not reuse_fixtures:
                     block_msg = (
                         f"This test case needs an existing {ftype} record, but reuse of existing test "
-                        f"data is turned off and no {ftype} was created earlier in this run. Include a "
-                        f"test case that creates a {ftype} in this run, or turn reuse back on."
+                        f"data is turned off and no {ftype} was created earlier in this run or supplied "
+                        f"with the requirements. Include a test case that creates a {ftype} in this run, "
+                        f"provide one when submitting requirements, or turn reuse back on."
                     )
                 else:
                     block_msg = (
-                        f"This test case needs an existing {ftype} record, and none is available yet "
-                        f"for this environment. Run a test case that creates a {ftype} first, or select "
-                        f"both together in the same run."
+                        f"This test case needs an existing {ftype} record, and none is available - not "
+                        f"created earlier in this run, not supplied with the requirements, and none on "
+                        f"file yet for this environment. Run a test case that creates a {ftype} first, "
+                        f"select both together in the same run, or provide one when submitting "
+                        f"requirements (for a state the automation can't create itself, such as a "
+                        f"resigned/offboarded employee)."
                     )
                 results_by_tc[tc_id] = {
                     "tc_id": tc_id, "title": tc.get("title", ""), "verdict": "BLOCKED",
@@ -1844,11 +1873,14 @@ async def _run_execution_batch_impl(
             else:
                 working_tc["steps"] = fixtures.substitute_fixture_placeholders(working_tc.get("steps", ""), ftype, fixture)
                 working_tc["precondition"] = fixtures.substitute_fixture_placeholders(working_tc.get("precondition", ""), ftype, fixture)
-                created_by = fixture.get("created_by", {})
-                when_label = "earlier in this run" if created_by.get("exec_id") == exec_id else "by a previous run"
-                creator_tc = created_by.get("tc_id", "")
-                by_label = f" by {creator_tc}" if creator_tc else ""
-                fixture_note = f" (Ran against an existing {ftype} test record created {when_label}{by_label}.)"
+                if client_supplied:
+                    fixture_note = f" (Ran against the {ftype} test record you supplied with the requirements.)"
+                else:
+                    created_by = fixture.get("created_by", {})
+                    when_label = "earlier in this run" if created_by.get("exec_id") == exec_id else "by a previous run"
+                    creator_tc = created_by.get("tc_id", "")
+                    by_label = f" by {creator_tc}" if creator_tc else ""
+                    fixture_note = f" (Ran against an existing {ftype} test record created {when_label}{by_label}.)"
 
         if skip_execution:
             continue
