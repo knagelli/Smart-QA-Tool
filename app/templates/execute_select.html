@@ -81,6 +81,11 @@
       <span class="hint">Recommended: a &ldquo;needs existing&hellip;&rdquo; test case will reuse a record created earlier today instead of failing or creating a duplicate. Uncheck to force every test case to only use data created in this same run.</span>
     </label>
 
+    <label>Screenshots per test case (max {{ max_screenshots_ceiling }})
+      <input type="number" name="max_screenshots" value="{{ max_screenshots_default }}" min="1" max="{{ max_screenshots_ceiling }}">
+      <span class="hint">Defaults to {{ max_screenshots_default }} unless you change it. Values above {{ max_screenshots_ceiling }} aren't accepted &mdash; please choose {{ max_screenshots_ceiling }} or fewer. For a test that fails or gets blocked, the shown screenshots focus on the sequence leading up to that outcome rather than an even spread across the whole test.</span>
+    </label>
+
     <p class="hint" id="estimate-line" style="margin:2px 0 10px">Select test cases above to see an estimated run time.</p>
 
     <button type="submit" style="margin-top:8px">Run Selected Test Cases Live</button>
