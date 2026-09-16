@@ -28,6 +28,64 @@ VERDICT_BADGE = {
     "BLOCKED": ('<span class="badge flagged">BLOCKED</span>', "row-flagged"),
 }
 
+# Fraction of the screenshot cap reserved for early-run context on a
+# FAIL/BLOCKED test case, before the rest goes to a tail window ending at
+# the final screenshot. See _select_screenshots below.
+_FAIL_CONTEXT_FRACTION = 0.2
+_FAIL_CONTEXT_MIN = 2
+
+
+def _even_sample_indices(total: int, k: int) -> list:
+    """k evenly-spaced indices across range(total), always including the
+    first and last. Used for PASS verdicts, where breadth of coverage
+    across the whole run is what a reviewer wants."""
+    if k <= 1:
+        return [total - 1]
+    step = (total - 1) / (k - 1)
+    seen = []
+    for i in range(k):
+        idx = round(i * step)
+        if idx not in seen:
+            seen.append(idx)
+    return seen
+
+
+def _select_screenshots(screenshots: list, verdict: str, cap: int | None) -> tuple[list, str | None]:
+    """Returns (selected_screenshots, disclosure_note_or_None).
+
+    Verdict-aware, per the 2026-09-16 council review (see
+    claude/... council debate on the screenshot-cap idea): even-sampling
+    is right for a PASS (breadth of coverage matters), but for a FAIL or
+    BLOCKED, evidentiary value concentrates near the end of the run - a
+    small early-context slice plus a majority tail window ending at the
+    final screenshot serves a reviewer far better than a uniform spread
+    that dilutes exactly the moments that explain what went wrong.
+
+    Purely a display filter - does not touch what execute_engine.py
+    actually captured, and does not change execution cost."""
+    total = len(screenshots)
+    if not cap or total <= cap:
+        return screenshots, None
+
+    if verdict == "PASS":
+        indices = _even_sample_indices(total, cap)
+        note = f"{len(indices)} of {total} actions shown, evenly sampled across the run."
+        return [screenshots[i] for i in indices], note
+
+    # FAIL / BLOCKED (or an unrecognized verdict, treated the same way,
+    # since a missing/unknown verdict is more likely an error case than a
+    # clean success): small head for orientation, majority tail leading up
+    # to and including the final screenshot.
+    head_n = min(max(_FAIL_CONTEXT_MIN, round(cap * _FAIL_CONTEXT_FRACTION)), cap - 1)
+    tail_n = cap - head_n
+    head_indices = list(range(0, head_n))
+    tail_start = max(head_n, total - tail_n)
+    tail_indices = list(range(tail_start, total))
+    indices = sorted(set(head_indices + tail_indices))
+    reason = "failure" if verdict == "FAIL" else "block"
+    note = f"{len(indices)} of {total} actions shown, focused on the sequence leading up to the {reason}."
+    return [screenshots[i] for i in indices], note
+
 
 def build_execution_report(data: dict) -> str:
     """data shape:
@@ -54,10 +112,15 @@ def build_execution_report(data: dict) -> str:
     can_zip = bool(run_id and exec_id and data.get("token"))
     run_zip_url = f"/download-exec-zip/{esc(run_id)}/{esc(exec_id)}{token_qs}" if can_zip else ""
 
+    max_screenshots = data.get("max_screenshots")
+
     sections = []
     for r in results:
         badge, row_cls = VERDICT_BADGE.get(r.get("verdict"), ('<span class="badge">UNKNOWN</span>', ""))
         step_items = "".join(f"<li>{esc(s)}</li>" for s in r.get("step_log", [])) or "<li class='empty'>No steps recorded.</li>"
+        shown_screenshots, sample_note = _select_screenshots(
+            r.get("screenshots", []), r.get("verdict"), max_screenshots
+        )
         def _shot_html(src: str) -> str:
             full_url = f"{esc(src)}{token_qs}"
             dl_name = esc(f'{r.get("tc_id","")}_{src.rsplit("/", 1)[-1]}')
@@ -74,8 +137,9 @@ def build_execution_report(data: dict) -> str:
             )
 
         shot_items = "".join(
-            _shot_html(src) for src in r.get("screenshots", [])
+            _shot_html(src) for src in shown_screenshots
         ) or "<p class='empty'>No screenshots captured.</p>"
+        sample_note_html = f'<p class="shot-sample-note">{esc(sample_note)}</p>' if sample_note else ""
         tc_zip_url = f"/download-exec-zip/{esc(run_id)}/{esc(exec_id)}/{esc(r.get('tc_id',''))}{token_qs}" if can_zip and r.get("screenshots") else ""
         tc_zip_html = f'<a class="btn-zip" href="{tc_zip_url}">Download all screenshots (.zip)</a>' if tc_zip_url else ""
         sections.append(f"""
@@ -89,6 +153,7 @@ def build_execution_report(data: dict) -> str:
     <summary>Step log ({len(r.get('step_log', []))} actions)</summary>
     <ol class="exec-steps">{step_items}</ol>
   </details>
+  {sample_note_html}
   <div class="shot-gallery">{shot_items}</div>
   {tc_zip_html}
 </div>""")
@@ -125,6 +190,7 @@ body{{font-family:system-ui,sans-serif;background:var(--bg);color:var(--text);fo
 .badge.valid{{background:var(--gbg);color:var(--green)}}.badge.flagged{{background:var(--abg);color:var(--amber)}}
 .badge.gap{{background:var(--rbg);color:var(--red)}}
 .shot-gallery{{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px}}
+.shot-sample-note{{font-size:11.5px;color:var(--muted);font-style:italic;margin-top:10px}}
 .shot img{{max-width:220px;border:1px solid var(--border);border-radius:6px;display:block}}
 .empty{{color:var(--muted);font-style:italic}}
 .ft{{margin-top:36px;text-align:center;font-size:12px;color:var(--muted);border-top:1px solid var(--border);padding-top:16px}}
@@ -140,12 +206,11 @@ body{{font-family:system-ui,sans-serif;background:var(--bg);color:var(--text);fo
     <a class="topbar-brand" href="/">Req<span>2</span>QA</a>
     <button type="button" class="topbar-toggle" aria-label="Open menu" aria-expanded="false" aria-controls="topbar-nav">&#9776;</button>
     <nav class="topbar-nav" id="topbar-nav">
+      <a href="/about">About</a>
       <a href="/about#how-it-works">How it works</a>
-      <a href="/import-tests">Import test cases</a>
+      <a href="/security">Security</a>
       <a href="/history">Run history</a>
       <a href="/#faq">FAQ</a>
-      <a href="/about">About</a>
-      <a href="/security">Security</a>
     </nav>
     <a class="btn topbar-cta" href="/#chooser">Get Started</a>
   </div>

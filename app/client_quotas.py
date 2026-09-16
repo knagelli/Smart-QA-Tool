@@ -166,6 +166,79 @@ def record_kept(access_code: str, kept_count: int) -> tuple[int, str | None]:
         return record["consumed_count"], warning
 
 
+def set_execution_allowance(access_code: str, kept_count: int) -> None:
+    """Called once per confirmed generation (right after record_kept), NOT an
+    admin action - this is what implements the 2026-09-16 council verdict on
+    the execution-limit question: the disclosed execution limit for an
+    engagement is exactly the number of test cases the client kept, with NO
+    hidden multiplier/buffer on top. A client who keeps 25 test cases has an
+    execution allowance of exactly 25, told to them as such and enforced as
+    such - not "25 disclosed, 31 actually allowed."
+
+    A no-op if this access code has no quota configured at all (unrestricted
+    legacy client, same fail-open default used everywhere else in this
+    module). Updates subscribed_execution_count to the LATEST kept count
+    (an engagement's scope moves with its most recent confirmed generation,
+    consistent with the existing policy that a new generation supersedes the
+    previous run's kept set) but deliberately does NOT reset
+    consumed_execution_count - execution already run and billed against an
+    earlier kept set stays counted; only the forward-looking ceiling moves.
+    """
+    with _lock:
+        data = _load()
+        if access_code not in data:
+            return
+        data[access_code]["subscribed_execution_count"] = kept_count
+        data[access_code].setdefault("consumed_execution_count", 0)
+        data[access_code]["updated_at"] = _now_iso()
+        _save(data)
+
+
+def check_can_execute(access_code: str, requested_count: int) -> tuple[bool, str | None]:
+    """Returns (allowed, block_reason). block_reason is None when allowed.
+    Deliberately has NO 1.5x/1.25x-style grace ceiling the way generation
+    does - the council's verdict on 2026-09-16 was that a hidden buffer on
+    execution is a real, undisclosed cost leak and creates a false-overage
+    signal for the billing-visibility email, so this blocks exactly at the
+    disclosed number, every time, no exceptions baked into the code. A
+    client with no quota configured, or one whose execution allowance
+    hasn't been set yet (no generation confirmed under this access code),
+    is unrestricted - same fail-open default as the rest of this module."""
+    quota = get_quota(access_code)
+    if quota is None:
+        return True, None
+    subscribed = quota.get("subscribed_execution_count")
+    if subscribed is None:
+        return True, None
+    consumed = quota.get("consumed_execution_count", 0)
+    if consumed + requested_count > subscribed:
+        remaining = max(0, subscribed - consumed)
+        return False, (
+            f"This engagement's execution allowance is {subscribed} test case(s) "
+            f"(based on what was kept from generation), of which {consumed} have "
+            f"already been run. This request would run {requested_count} more, but "
+            f"only {remaining} remain. Please select {remaining} or fewer, or "
+            "contact kalyan@req2qa.com to increase the allowance."
+        )
+    return True, None
+
+
+def record_executed(access_code: str, executed_count: int) -> int | None:
+    """Called once a live-execution batch finishes. Permanently adds
+    executed_count to consumed_execution_count. Returns the new
+    consumed_execution_count, or None if no quota is configured for this
+    access code (nothing to track)."""
+    with _lock:
+        data = _load()
+        if access_code not in data:
+            return None
+        record = data[access_code]
+        record["consumed_execution_count"] = record.get("consumed_execution_count", 0) + executed_count
+        record["updated_at"] = _now_iso()
+        _save(data)
+        return record["consumed_execution_count"]
+
+
 def list_all_quotas() -> list:
     """For the admin view."""
     with _lock:

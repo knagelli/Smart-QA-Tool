@@ -570,6 +570,12 @@ EXECUTION_RATE_WINDOW_SECONDS = 30 * 60
 MAX_TEST_CASES_PER_EXECUTION = 25
 EXECUTIONS_MAX_AGE_SECONDS = DOWNLOAD_LINK_TTL_SECONDS + 24 * 60 * 60
 
+# Screenshots-per-test-case field on the execution form (2026-09-16) - shown
+# to the client as an editable default, not a silent internal cap. See
+# execution_report.py for the verdict-aware selection this feeds into.
+DEFAULT_MAX_SCREENSHOTS_PER_TEST = 20
+MAX_SCREENSHOTS_PER_TEST_CEILING = 50
+
 
 def _sweep_pending():
     """Opportunistic cleanup of abandoned Option B review sessions (a flow
@@ -989,6 +995,10 @@ async def confirm_generated(request: Request, run_id: str, access_code: str = Fo
         f.write(f"{run_id},{client_name},{access_code},{data['run_date']},{kept_count},{len(all_cases)}\n")
 
     new_consumed, quota_warning = client_quotas.record_kept(access_code, kept_count)
+    # 2026-09-16 council verdict: the execution allowance for this engagement
+    # is exactly the kept count, disclosed and enforced identically - no
+    # hidden buffer. See client_quotas.set_execution_allowance.
+    client_quotas.set_execution_allowance(access_code, kept_count)
 
     return templates.TemplateResponse(request, "result.html",
         {
@@ -1549,6 +1559,8 @@ async def execute_select(request: Request, run_id: str):
             "application": data.get("application", ""),
             "test_cases": test_cases,
             "max_selectable": MAX_TEST_CASES_PER_EXECUTION,
+            "max_screenshots_default": DEFAULT_MAX_SCREENSHOTS_PER_TEST,
+            "max_screenshots_ceiling": MAX_SCREENSHOTS_PER_TEST_CEILING,
             "error": None,
             "hide_trial_cta": True,
         },
@@ -1567,6 +1579,7 @@ async def execute_run(
     username: str = Form(...),
     password: str = Form(...),
     initials: str = Form(""),
+    max_screenshots: str = Form(str(DEFAULT_MAX_SCREENSHOTS_PER_TEST)),
 ):
     if not run_id.isalnum():
         raise HTTPException(status_code=400)
@@ -1580,6 +1593,8 @@ async def execute_run(
                 "run_id": run_id, "application": application,
                 "test_cases": test_cases or [], "max_selectable": MAX_TEST_CASES_PER_EXECUTION, "error": msg,
                 "hide_trial_cta": True,
+                "max_screenshots_default": DEFAULT_MAX_SCREENSHOTS_PER_TEST,
+                "max_screenshots_ceiling": MAX_SCREENSHOTS_PER_TEST_CEILING,
             },
             status_code=code,
         )
@@ -1595,6 +1610,32 @@ async def execute_run(
 
     application = data.get("application", "")
     all_test_cases = {tc.get("tc_id"): tc for tc in data.get("test_scenarios", [])}
+
+    # Screenshot-count field: defaults to DEFAULT_MAX_SCREENSHOTS_PER_TEST
+    # unless the client explicitly changes it; any value above
+    # MAX_SCREENSHOTS_PER_TEST_CEILING is rejected with a clear message
+    # rather than silently clamped, so the client knows why their number
+    # wasn't honored. This only controls how many of the already-captured
+    # screenshots are SHOWN in the report (see execution_report.py) - it
+    # does not change what execute_engine.py captures internally.
+    try:
+        max_screenshots_val = int(str(max_screenshots).strip())
+    except (TypeError, ValueError):
+        return err(
+            f"Screenshots per test case must be a whole number (default {DEFAULT_MAX_SCREENSHOTS_PER_TEST}).",
+            test_cases=data.get("test_scenarios"), application=application,
+        )
+    if max_screenshots_val > MAX_SCREENSHOTS_PER_TEST_CEILING:
+        return err(
+            f"Screenshots per test case can't be more than {MAX_SCREENSHOTS_PER_TEST_CEILING}. "
+            f"Please select a value less than {MAX_SCREENSHOTS_PER_TEST_CEILING}.",
+            test_cases=data.get("test_scenarios"), application=application,
+        )
+    if max_screenshots_val < 1:
+        return err(
+            "Screenshots per test case must be at least 1.",
+            test_cases=data.get("test_scenarios"), application=application,
+        )
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -1617,6 +1658,15 @@ async def execute_run(
         return err("Select at least one test case to run.", test_cases=data.get("test_scenarios"), application=application)
     if len(selected_ids) > MAX_TEST_CASES_PER_EXECUTION:
         return err(f"Please select at most {MAX_TEST_CASES_PER_EXECUTION} test cases per run.", test_cases=data.get("test_scenarios"), application=application)
+
+    # Execution allowance check (2026-09-16 council verdict - see
+    # client_quotas.set_execution_allowance/check_can_execute): the disclosed
+    # execution limit for this engagement is exactly what was kept from
+    # generation, enforced with no hidden buffer. A no-op for access codes
+    # with no quota configured (unrestricted legacy clients).
+    exec_allowed, exec_block_reason = client_quotas.check_can_execute(access_code, len(selected_ids))
+    if not exec_allowed:
+        return err(exec_block_reason, test_cases=data.get("test_scenarios"), application=application)
 
     if not _validate_env_url(env_url):
         return err(
@@ -1670,6 +1720,7 @@ async def execute_run(
         password=password, api_key=api_key, initials=initials,
         all_test_cases=all_test_cases, selected_ids=selected_ids,
         scheduled_ids=scheduled_ids, reuse_fixtures=reuse_fixtures,
+        access_code=access_code, max_screenshots=max_screenshots_val,
     )
     return RedirectResponse(
         url=f"/execute-status/{run_id}/{exec_id}?token={exec_token}",
@@ -1697,6 +1748,7 @@ async def _run_execution_batch_impl(
     run_id, exec_id, exec_dir, exec_token, application, client_name, role_label,
     module, env_url, env_host, username, password, api_key, initials,
     all_test_cases, selected_ids, scheduled_ids, reuse_fixtures,
+    access_code=None, max_screenshots=DEFAULT_MAX_SCREENSHOTS_PER_TEST,
 ):
     """Runs one batch of live-execution test cases (moved out of the
     request/response cycle - see the Phase B redirect in execute_run above).
@@ -1894,6 +1946,7 @@ async def _run_execution_batch_impl(
         "application": application, "client_name": client_name, "run_date": run_date,
         "environment_label": env_label, "role_label": role_label, "results": results,
         "token": exec_token, "run_id": run_id, "exec_id": exec_id,
+        "max_screenshots": max_screenshots,
     }
     (exec_dir / "report.html").write_text(build_execution_report(report_data))
 
@@ -1904,6 +1957,13 @@ async def _run_execution_batch_impl(
         verdicts = ";".join(f"{r['tc_id']}={r['verdict']}" for r in results)
         f.write(f"{run_id},{exec_id},{client_name},{run_date},{application},{role_label},{module},{env_label},{verdicts}\n")
     _append_history("execute", run_id, client_name, initials, application, run_date, exec_id=exec_id)
+
+    # Execution allowance consumption (2026-09-16 council verdict) - a no-op
+    # if this access code has no quota configured. Recorded here (batch
+    # completion), not at selection time, so a batch that crashes partway
+    # doesn't consume allowance for cases that were never actually run.
+    if access_code:
+        client_quotas.record_executed(access_code, len(results))
 
     summary_counts = {
         "total": len(results),
