@@ -860,8 +860,22 @@ async def analyze(
     # claude/council-review-client-supplied-test-data-devils-advocate.md and
     # app/fixtures.py. Scoped to this one run (not the cross-run registry);
     # the PII heuristic only ever warns, never blocks.
-    data["client_test_data"] = fixtures.parse_client_seed_text(client_test_data)
-    data["client_test_data_pii_flags"] = fixtures.scan_for_pii_flags(client_test_data)
+    #
+    # Trial codes never reach live execution (_check_access_no_trial rejects
+    # them outright), so this field is structurally unusable for a trial
+    # run - it's already hidden client-side for a "TRIAL-..." code (a
+    # founder-decided, presentation-only difference between the trial and
+    # paid experience, 2026-09-16), and here on the server it's discarded
+    # outright rather than merely ignored: no reason to retain 7 days of
+    # whatever was pasted in if it can never be used, and this holds even if
+    # the client-side hide is bypassed (view-source, JS disabled, etc.) -
+    # the field is a no-op for trial regardless of how it's reached.
+    if trial is not None:
+        data["client_test_data"] = []
+        data["client_test_data_pii_flags"] = []
+    else:
+        data["client_test_data"] = fixtures.parse_client_seed_text(client_test_data)
+        data["client_test_data_pii_flags"] = fixtures.scan_for_pii_flags(client_test_data)
 
     total_reqs = len(data.get("validation", []))
     flagged = sum(1 for v in data.get("validation", []) if not v.get("valid_for_app"))
