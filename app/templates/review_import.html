@@ -68,11 +68,11 @@
       </div>
 
       <label>Case ID
-        <input type="text" name="tc_id_{{ loop.index0 }}" value="{{ tc.tc_id }}">
+        <input type="text" name="tc_id_{{ loop.index0 }}" maxlength="60" value="{{ tc.tc_id }}">
       </label>
 
       <label>Title
-        <input type="text" name="title_{{ loop.index0 }}" value="{{ tc.title }}">
+        <input type="text" name="title_{{ loop.index0 }}" maxlength="150" value="{{ tc.title }}">
       </label>
 
       <label>Precondition

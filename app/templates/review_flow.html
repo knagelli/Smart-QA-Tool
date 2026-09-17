@@ -30,7 +30,7 @@
 
   <form class="card form" action="/confirm-flow/{{ run_id }}" method="post">
     <label>Flow name
-      <input type="text" name="flow_name" value="{{ flow.flow_name }}">
+      <input type="text" name="flow_name" maxlength="60" value="{{ flow.flow_name }}">
     </label>
 
     <input type="hidden" name="step_count" value="{{ flow.steps|length }}">
@@ -47,7 +47,7 @@
       </div>
 
       <label>Screen / stage
-        <input type="text" name="screen_{{ loop.index0 }}" value="{{ step.screen_or_stage }}">
+        <input type="text" name="screen_{{ loop.index0 }}" maxlength="60" value="{{ step.screen_or_stage }}">
       </label>
 
       <label>Description
@@ -55,7 +55,7 @@
       </label>
 
       <label>Inputs <span class="opt">(comma-separated)</span>
-        <input type="text" name="inputs_{{ loop.index0 }}" value="{{ step.inputs|join(', ') }}">
+        <input type="text" name="inputs_{{ loop.index0 }}" maxlength="300" value="{{ step.inputs|join(', ') }}">
       </label>
 
       <label class="inline-check">
@@ -64,7 +64,7 @@
       </label>
 
       <label>Decision detail
-        <input type="text" name="decision_detail_{{ loop.index0 }}" value="{{ step.decision_detail }}" placeholder="Branch conditions/outcomes, if applicable">
+        <input type="text" name="decision_detail_{{ loop.index0 }}" maxlength="2000" value="{{ step.decision_detail }}" placeholder="Branch conditions/outcomes, if applicable">
       </label>
     </div>
     {% endfor %}

@@ -32,25 +32,25 @@
     </label>
 
     <label>Role this test user represents
-      <input type="text" name="role_label" required placeholder="e.g. Employee, Manager, Payroll Administrator">
+      <input type="text" name="role_label" required maxlength="100" placeholder="e.g. Employee, Manager, Payroll Administrator">
       <span class="hint">Different modules often need different access levels &mdash; say which role this run is testing as.</span>
     </label>
 
     <label>Module / area being tested
-      <input type="text" name="module" required placeholder="e.g. Rostering, Leave Application, Timesheet, Payroll">
+      <input type="text" name="module" required maxlength="100" placeholder="e.g. Rostering, Leave Application, Timesheet, Payroll">
     </label>
 
     <label>Sandbox/UAT environment URL
-      <input type="text" name="env_url" required placeholder="https://yourcompany-uat.example.com">
+      <input type="text" name="env_url" required maxlength="300" placeholder="https://yourcompany-uat.example.com">
       <span class="hint">Must be a reachable, non-production address. Production environments are never supported.</span>
     </label>
 
     <label>Test-user username
-      <input type="text" name="username" required autocomplete="off">
+      <input type="text" name="username" required maxlength="150" autocomplete="off">
     </label>
 
     <label>Test-user password
-      <input type="password" name="password" required autocomplete="off">
+      <input type="password" name="password" required maxlength="128" autocomplete="off">
     </label>
 
     <label>Your name or initials <span class="opt">(optional)</span>
