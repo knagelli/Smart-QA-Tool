@@ -223,11 +223,83 @@ def check_can_execute(access_code: str, requested_count: int) -> tuple[bool, str
     return True, None
 
 
+def reserve_execution(access_code: str, requested_count: int) -> tuple[bool, str | None]:
+    """Atomically checks AND reserves execution allowance in one step, inside
+    the same lock the rest of this module uses - added 2026-09-17 to close a
+    check-then-act race in the previous check_can_execute()-then-
+    record_executed() flow: that flow only debited the allowance once a
+    batch *finished*, so two submissions racing each other under the same
+    access code (any number of tabs, browsers, or employees sharing that
+    code - quota is per engagement/access code, not per person) could both
+    see the same "not yet spent" number and both get approved, together
+    exceeding what the client actually bought.
+
+    Call this exactly once, right when a live-execution submission is fully
+    validated and about to be handed to the background batch runner - NOT
+    earlier (a reservation made before all other validation has passed
+    would need to be unwound if a later check rejects the request) and NOT
+    record_executed, which this replaces for the completion side (see
+    reconcile_execution below).
+
+    Returns (allowed, block_reason), same shape as check_can_execute (which
+    remains as a read-only preview, e.g. for the admin view, but should no
+    longer gate an actual execution request). Same fail-open default as the
+    rest of this module: unconfigured/legacy access codes are unrestricted
+    and nothing is reserved for them."""
+    with _lock:
+        data = _load()
+        if access_code not in data:
+            return True, None
+        record = data[access_code]
+        subscribed = record.get("subscribed_execution_count")
+        if subscribed is None:
+            return True, None
+        consumed = record.get("consumed_execution_count", 0)
+        if consumed + requested_count > subscribed:
+            remaining = max(0, subscribed - consumed)
+            return False, (
+                f"This engagement's execution allowance is {subscribed} test case(s) "
+                f"(based on what was kept from generation), of which {consumed} have "
+                "already been run or are reserved by an in-progress run. This request "
+                f"would run {requested_count} more, but only {remaining} remain. Please "
+                f"select {remaining} or fewer, or contact kalyan@req2qa.com to increase "
+                "the allowance."
+            )
+        record["consumed_execution_count"] = consumed + requested_count
+        record["updated_at"] = _now_iso()
+        _save(data)
+        return True, None
+
+
+def reconcile_execution(access_code: str, reserved_count: int, actual_count: int) -> None:
+    """Trues up a reservation made by reserve_execution once a batch is done
+    (success or crash) against how many test cases it actually attempted.
+    Only ever releases allowance BACK (adjusts down) - never adjusts up -
+    so a batch that errored out or crashed before attempting every reserved
+    case doesn't leave the client permanently charged for cases that were
+    reserved but never run. A no-op if actual_count >= reserved_count
+    (nothing to release) or if this access code has no quota configured."""
+    if actual_count >= reserved_count:
+        return
+    with _lock:
+        data = _load()
+        if access_code not in data:
+            return
+        record = data[access_code]
+        if record.get("subscribed_execution_count") is None:
+            return
+        released = reserved_count - actual_count
+        record["consumed_execution_count"] = max(0, record.get("consumed_execution_count", 0) - released)
+        record["updated_at"] = _now_iso()
+        _save(data)
+
+
 def record_executed(access_code: str, executed_count: int) -> int | None:
-    """Called once a live-execution batch finishes. Permanently adds
-    executed_count to consumed_execution_count. Returns the new
-    consumed_execution_count, or None if no quota is configured for this
-    access code (nothing to track)."""
+    """Superseded 2026-09-17 by reserve_execution (at submission) +
+    reconcile_execution (at completion) - see those for why. Kept only in
+    case something outside main.py's live-execution flow still calls this;
+    do not wire this back into that flow, since debiting only at completion
+    reopens the exact race those two functions were added to close."""
     with _lock:
         data = _load()
         if access_code not in data:

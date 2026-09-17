@@ -612,6 +612,24 @@ EXECUTION_RATE_WINDOW_SECONDS = 30 * 60
 MAX_TEST_CASES_PER_EXECUTION = 25
 EXECUTIONS_MAX_AGE_SECONDS = DOWNLOAD_LINK_TTL_SECONDS + 24 * 60 * 60
 
+# Tracks, per access code, the one live-execution batch currently running in
+# the background (see _run_execution_batch) - keyed by access_code, cleared
+# in _run_execution_batch's finally block regardless of success/error. This
+# is what lets execute_run warn a client who submits a second batch (e.g. via
+# the browser back button re-posting execute_select, or a second tab) while
+# their first one is still in flight, instead of silently letting both run.
+# NOTE (2026-09-17): keying this warning on access_code alone is known to be
+# too broad for access codes shared by multiple employees (see
+# claude/... council discussion) - flagged for a follow-up (likely keyed on
+# run_id instead), not yet implemented; left as-is for now since actual
+# quota enforcement no longer depends on this dict at all (see
+# client_quotas.reserve_execution/reconcile_execution, which enforce the
+# disclosed allowance atomically at submission regardless of who/how many
+# are submitting). In-memory only (matches _execution_calls above) - a
+# restart clears it, which just means this warning is skipped for any batch
+# that was running at restart time; it does not weaken quota enforcement.
+_active_executions_by_code: dict = {}
+
 # Screenshots-per-test-case field on the execution form (2026-09-16) - shown
 # to the client as an editable default, not a silent internal cap. See
 # execution_report.py for the verdict-aware selection this feeds into.
@@ -1900,14 +1918,33 @@ async def execute_run(
     if len(selected_ids) > MAX_TEST_CASES_PER_EXECUTION:
         return err(f"Please select at most {MAX_TEST_CASES_PER_EXECUTION} test cases per run.", test_cases=data.get("test_scenarios"), application=application)
 
-    # Execution allowance check (2026-09-16 council verdict - see
-    # client_quotas.set_execution_allowance/check_can_execute): the disclosed
-    # execution limit for this engagement is exactly what was kept from
-    # generation, enforced with no hidden buffer. A no-op for access codes
-    # with no quota configured (unrestricted legacy clients).
-    exec_allowed, exec_block_reason = client_quotas.check_can_execute(access_code, len(selected_ids))
-    if not exec_allowed:
-        return err(exec_block_reason, test_cases=data.get("test_scenarios"), application=application)
+    # Warn (rather than silently allow) a second submission for this access
+    # code while an earlier batch is still running - e.g. the browser back
+    # button re-posting execute_select, or a second tab. Skipped once the
+    # client explicitly confirms via the interstitial below.
+    active = _active_executions_by_code.get(access_code)
+    if active and form.get("confirm_concurrent") != "1":
+        quota = client_quotas.get_quota(access_code)
+        remaining = None
+        if quota and quota.get("subscribed_execution_count") is not None:
+            remaining = max(0, quota["subscribed_execution_count"] - quota.get("consumed_execution_count", 0))
+        hidden_fields = {
+            "access_code": access_code, "role_label": role_label, "module": module,
+            "env_url": env_url, "username": username, "password": password,
+            "initials": initials, "max_screenshots": max_screenshots,
+        }
+        if form.get("reuse_fixtures") is not None:
+            hidden_fields["reuse_fixtures"] = "on"
+        return templates.TemplateResponse(request, "confirm_concurrent_execution.html", {
+            "run_id": run_id,
+            "application": application,
+            "active_total": active.get("total"),
+            "active_status_url": active.get("status_url"),
+            "requested_count": len(selected_ids),
+            "remaining": remaining,
+            "hidden_fields": hidden_fields,
+            "selected_ids": selected_ids,
+        })
 
     if not _validate_env_url(env_url):
         return err(
@@ -1937,6 +1974,19 @@ async def execute_run(
         return 0 if (role and role[0] == "creates") else 1
     scheduled_ids = sorted(selected_ids, key=_schedule_priority)
 
+    # Execution allowance check-and-reserve (2026-09-16 council verdict on
+    # the limit itself; 2026-09-17 fix for how it's enforced - see
+    # client_quotas.reserve_execution's docstring for the race this closes).
+    # Placed here deliberately: after every other validation has passed, so
+    # nothing reserved here needs to be unwound by an earlier check failing,
+    # and immediately before the batch is committed to actually running -
+    # reconcile_execution (called from the batch's completion/crash paths
+    # below) is what trues this reservation up afterward. A no-op for
+    # access codes with no quota configured (unrestricted legacy clients).
+    exec_allowed, exec_block_reason = client_quotas.reserve_execution(access_code, len(selected_ids))
+    if not exec_allowed:
+        return err(exec_block_reason, test_cases=data.get("test_scenarios"), application=application)
+
     # Phase B - run the batch in the background and hand the client an
     # immediate redirect to a live status page, instead of holding one HTTP
     # request open for the whole batch (which risked platform request
@@ -1953,6 +2003,10 @@ async def execute_run(
             for t in selected_ids
         ],
     })
+    _active_executions_by_code[access_code] = {
+        "total": len(selected_ids),
+        "status_url": f"/execute-status/{run_id}/{exec_id}?token={exec_token}",
+    }
     background_tasks.add_task(
         _run_execution_batch,
         run_id=run_id, exec_id=exec_id, exec_dir=exec_dir, exec_token=exec_token,
@@ -1973,10 +2027,25 @@ async def execute_run(
 async def _run_execution_batch(*args, **kwargs):
     """Thin wrapper so a bug (or a crash) in the batch itself still flips
     the status page out of "running" instead of leaving a client staring
-    at a progress bar that never moves and never explains why."""
+    at a progress bar that never moves and never explains why. Also clears
+    _active_executions_by_code on the way out, success or failure, so the
+    "a job is already running" warning never gets stuck on after this batch
+    is actually done. Also the single place that reconciles the quota
+    reservation _run_execution_batch_impl's return value tells us how many
+    cases actually got a recorded result: reserve_execution reserved
+    len(selected_ids) up front, and this reconciles that down to whatever
+    actually completed - len(results) on a normal finish, or 0 if the batch
+    never got far enough to return anything (a crash releases the whole
+    reservation, since nothing was actually attempted to completion).
+    Deliberately reconciled here, exactly once, rather than inside impl
+    itself, so a crash after impl's own bookkeeping can never double-count
+    the release."""
     exec_dir = kwargs.get("exec_dir")
+    access_code = kwargs.get("access_code")
+    selected_ids = kwargs.get("selected_ids") or []
+    actual_count = 0
     try:
-        await _run_execution_batch_impl(*args, **kwargs)
+        actual_count = await _run_execution_batch_impl(*args, **kwargs) or 0
     except Exception as e:
         ref = _log_and_ref(e, "background execution batch crashed")
         if exec_dir is not None:
@@ -1984,6 +2053,10 @@ async def _run_execution_batch(*args, **kwargs):
                 "state": "error",
                 "error": GENERIC_ERROR_MESSAGE.format(ref=ref),
             })
+    finally:
+        if access_code is not None:
+            client_quotas.reconcile_execution(access_code, len(selected_ids), actual_count)
+            _active_executions_by_code.pop(access_code, None)
 
 
 async def _run_execution_batch_impl(
@@ -2219,13 +2292,6 @@ async def _run_execution_batch_impl(
         f.write(f"{run_id},{exec_id},{client_name},{run_date},{application},{role_label},{module},{env_label},{verdicts}\n")
     _append_history("execute", run_id, client_name, initials, application, run_date, exec_id=exec_id)
 
-    # Execution allowance consumption (2026-09-16 council verdict) - a no-op
-    # if this access code has no quota configured. Recorded here (batch
-    # completion), not at selection time, so a batch that crashes partway
-    # doesn't consume allowance for cases that were never actually run.
-    if access_code:
-        client_quotas.record_executed(access_code, len(results))
-
     summary_counts = {
         "total": len(results),
         "passed": sum(1 for r in results if r["verdict"] == "PASS"),
@@ -2249,6 +2315,7 @@ async def _run_execution_batch_impl(
             "download_token": exec_token, "hide_trial_cta": True, **summary_counts,
         },
     })
+    return len(results)
 
 
 @app.get("/download-exec/{run_id}/{exec_id}/{subpath:path}")
