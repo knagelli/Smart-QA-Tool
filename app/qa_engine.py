@@ -79,13 +79,88 @@ OUTPUT: respond with ONLY this JSON object (no other text):
 """
 
 
-def run_qa_analysis(application: str, requirements_text: str, api_key: str, max_test_cases: int | None = None) -> dict:
+# --- Process Coverage Insights (Beta) - added 2026-09-17, see
+# claude/process-gap-analysis-design-consensus-2026-09-16.md and
+# claude/process-coverage-insights-final-copy-2026-09-16.md for the full
+# design and locked copy this implements. Deliberately additive: when
+# process_context is None (the default, and the only path free-trial runs
+# ever take - see main.py), the prompt and output shape are byte-for-byte
+# what they were before this feature existed. No regression risk for
+# existing callers. -----------------------------------------------------
+PROCESS_CONTEXT_ADDENDUM = """
+
+PROCESS CONTEXT (optional, provided by the client alongside their requirements - {frame_label}):
+{process_body}
+
+ADDITIONAL TASK - Process Coverage Insights (Beta):
+6. Treat the process above as a list of real steps the client's actual
+   process goes through - it may include steps no requirement mentions at
+   all, and that is an expected, useful finding, not an error.
+   {steps_instruction}
+7. For every test scenario, add a "flow_step_ids" field: the process step_id
+   value(s) (from the list above) that scenario actually exercises. Empty
+   list if the scenario doesn't relate to a listed step.
+8. After generating all scenarios, list every process step_id from above
+   that is referenced by NO scenario's flow_step_ids in "uncovered_process_steps"
+   (a list of step_id values only, e.g. ["P-003"]). Do not editorialize or
+   guess at why a step has no coverage - simply report which step_ids have
+   none; a human will review whether that's a real gap. Also include
+   "process_steps": the same list of steps from PROCESS CONTEXT above,
+   unchanged (echoed back so they can be reviewed/corrected before this
+   result is finalized).
+
+Also add "flow_step_ids": [] to every test scenario in the OUTPUT shape below
+(empty list when process context doesn't apply to that scenario), and add
+top-level "process_steps" and "uncovered_process_steps" as described above.
+"""
+
+
+def _build_process_context_block(process_context: dict) -> str:
+    """process_context shape: {"frame": "current"|"target", "steps": [{"step_id","screen_or_stage","description",...}, ...] | None,
+    "raw_text": "<free-text description, when no diagram was parsed>" | None}.
+    Exactly one of "steps" or "raw_text" is expected to be populated by the
+    caller (main.py) - both is harmless (steps taking precedence for the
+    "process above" reference), neither should happen (main.py only builds
+    this dict when at least one is present)."""
+    frame = (process_context.get("frame") or "current").strip().lower()
+    frame_label = (
+        "this is the client's CURRENT (as-is) process - a step with no test "
+        "coverage is a gap in testing how things work today"
+        if frame != "target" else
+        "this is the client's TARGET (to-be) process - a step with no test "
+        "coverage may simply mean that part isn't built/testable yet, not "
+        "necessarily a testing gap"
+    )
+    steps = process_context.get("steps")
+    if steps:
+        body = json.dumps(steps)
+        steps_instruction = (
+            "The steps above already have fixed step_id values from a parsed "
+            "diagram - reuse them exactly, do not renumber or invent new ones."
+        )
+    else:
+        raw_text = (process_context.get("raw_text") or "").strip()[:4000]
+        body = f'(client\'s own description, not yet broken into steps): "{raw_text}"'
+        steps_instruction = (
+            "Break the description above into a short, ordered list of discrete "
+            "steps yourself, assigning step_id values as P-001, P-002, ... in "
+            "the order they occur - this is what becomes \"process_steps\" below."
+        )
+    return PROCESS_CONTEXT_ADDENDUM.format(
+        frame_label=frame_label, process_body=body, steps_instruction=steps_instruction,
+    )
+
+
+def run_qa_analysis(application: str, requirements_text: str, api_key: str, max_test_cases: int | None = None,
+                     process_context: dict | None = None) -> dict:
     client = Anthropic(api_key=api_key)
 
     prompt = PROMPT_TEMPLATE.format(
         application=application.strip(),
         requirements_text=requirements_text.strip()[:120000],  # guard against runaway input
     )
+    if process_context:
+        prompt += _build_process_context_block(process_context)
     if max_test_cases is not None:
         # Used for the free trial (see app/trial_signups.py): the word-count
         # guard in main.py is only a proxy for "will this document produce

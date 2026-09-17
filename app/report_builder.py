@@ -158,6 +158,52 @@ def build_html(data):
         )
     trace_html = "\n".join(trace_rows) if trace_rows else '<tr><td colspan="4" class="empty">No traceability data.</td></tr>'
 
+    # Process Coverage Insights (Beta) - see claude/process-coverage-insights-
+    # final-copy-2026-09-16.md for the locked wording this reproduces
+    # verbatim. Only present when the client supplied a process diagram or
+    # description alongside their requirements (paid-tier only - see
+    # main.py's /analyze, where trial runs never set process_context).
+    process_steps = data.get("process_steps") or []
+    uncovered_process_steps = set(data.get("uncovered_process_steps", []))
+    process_section = ""
+    process_stat_card = ""
+    if process_steps:
+        frame = data.get("process_frame", "current")
+        frame_word = "target" if frame == "target" else "current"
+        proc_rows = []
+        for st in process_steps:
+            sid = st.get("step_id", "")
+            gap = sid in uncovered_process_steps
+            badge = '<span class="badge gap">NO TEST COVERAGE</span>' if gap else '<span class="badge valid">COVERED</span>'
+            proc_rows.append(
+                f'<tr><td><strong>{esc(sid)}</strong></td>'
+                f'<td>{esc(st.get("screen_or_stage",""))}</td>'
+                f'<td>{esc(st.get("description",""))}</td><td>{badge}</td></tr>'
+            )
+        proc_html = "\n".join(proc_rows) if proc_rows else '<tr><td colspan="4" class="empty">No process steps.</td></tr>'
+        process_section = f"""
+<h2 class="st">Process Coverage Insights <span class="pill">BETA</span></h2>
+<div class="callout">
+<strong>Process Coverage Insights (Beta)</strong> &mdash; These are process steps we found no test
+coverage for, based on the {esc(data.get("process_source","diagram/description"))} you provided as
+your {frame_word} process. Some of these may be intentional &mdash; handled manually, by policy, or
+by a system outside this run &mdash; so please confirm before treating any of these as a real gap.
+This reflects only the process shown in what you provided, not your full production process, and
+it's meant to support your own QA review, not replace it.
+</div>
+<div class="tw"><table><thead><tr>
+<th style="width:90px">Step ID</th><th style="width:20%">Screen / Stage</th>
+<th>Description</th><th style="width:160px">Coverage</th>
+</tr></thead><tbody>
+{proc_html}
+</tbody></table></div>
+"""
+        process_stat_card = (
+            f'<div class="card warn"><div class="n">{len(uncovered_process_steps)}</div>'
+            f'<div class="l">Process Steps to Review<br><span style="font-size:10px">'
+            f'of {len(process_steps)} total &mdash; see Process Coverage Insights below</span></div></div>'
+        )
+
     return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Test Scenarios &amp; Traceability Report</title><style>
@@ -194,6 +240,8 @@ tbody tr:hover{{background:#F1F5F9}}tbody td{{padding:10px 14px;vertical-align:t
 .badge.gap{{background:var(--rbg);color:var(--red)}}
 .ft{{margin-top:48px;text-align:center;font-size:12px;color:var(--muted);
 border-top:1px solid var(--border);padding-top:20px}}
+.callout{{background:var(--sky);border:1px solid var(--blue);border-radius:8px;padding:14px 18px;
+font-size:12.5px;color:var(--text);margin-bottom:14px;line-height:1.55}}
 @media print{{.tw{{overflow:visible}}body{{background:#fff}}}}
 </style></head><body><div class="wrap">
 <header class="hdr"><h1>Test Scenarios &amp; Requirements Traceability Report</h1>
@@ -210,8 +258,9 @@ border-top:1px solid var(--border);padding-top:20px}}
 <div class="card good"><div class="n">{valid_reqs}</div><div class="l">Valid for Application</div></div>
 <div class="card warn"><div class="n">{flagged_reqs}</div><div class="l">Flagged / Needs Review</div></div>
 <div class="card good"><div class="n">{total_tcs}</div><div class="l">Test Scenarios Generated</div></div>
+{process_stat_card}
 </div>
-
+{process_section}
 <h2 class="st">Requirement Validation <span class="pill">TABLE 1</span></h2>
 <div class="tw"><table><thead><tr>
 <th style="width:100px">Req ID</th><th style="width:40%">Requirement</th>
@@ -319,6 +368,24 @@ def build_xlsx(data, out_path):
             ws3.cell(row=r, column=c).alignment = Alignment(wrap_text=True, vertical="top")
     style_header(ws3, 4)
     autosize(ws3, [12, 55, 25, 16])
+
+    # Sheet 4 (optional): Process Coverage Insights (Beta)
+    process_steps = data.get("process_steps") or []
+    if process_steps:
+        uncovered_process_steps = set(data.get("uncovered_process_steps", []))
+        ws4 = wb.create_sheet("Process Coverage (Beta)")
+        ws4.append(["Step ID", "Screen / Stage", "Description", "Coverage"])
+        for st in process_steps:
+            sid = st.get("step_id", "")
+            gap = sid in uncovered_process_steps
+            status, fill = ("NO TEST COVERAGE", WARN_FILL) if gap else ("COVERED", GOOD_FILL)
+            ws4.append(xl_row([sid, st.get("screen_or_stage", ""), st.get("description", ""), status]))
+            r = ws4.max_row
+            for c in range(1, 5):
+                ws4.cell(row=r, column=c).fill = fill
+                ws4.cell(row=r, column=c).alignment = Alignment(wrap_text=True, vertical="top")
+        style_header(ws4, 4)
+        autosize(ws4, [12, 25, 55, 20])
 
     wb.save(out_path)
 
@@ -450,6 +517,8 @@ tbody tr:hover{{background:#F1F5F9}}tbody td{{padding:10px 14px;vertical-align:t
 .badge.gap{{background:var(--rbg);color:var(--red)}}
 .ft{{margin-top:48px;text-align:center;font-size:12px;color:var(--muted);
 border-top:1px solid var(--border);padding-top:20px}}
+.callout{{background:var(--sky);border:1px solid var(--blue);border-radius:8px;padding:14px 18px;
+font-size:12.5px;color:var(--text);margin-bottom:14px;line-height:1.55}}
 @media print{{.tw{{overflow:visible}}body{{background:#fff}}}}
 </style></head><body><div class="wrap">
 <header class="hdr"><h1>Custom Application &mdash; Test Coverage Report</h1>

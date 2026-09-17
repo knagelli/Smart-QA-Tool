@@ -753,6 +753,9 @@ async def analyze(
     baseline_version: str = Form(""),
     initials: str = Form(""),
     client_test_data: str = Form(""),
+    process_diagram_file: UploadFile | None = File(None),
+    process_description: str = Form(""),
+    process_frame: str = Form(""),
 ):
     _sweep_completed_runs()
 
@@ -823,16 +826,55 @@ async def analyze(
             return templates.TemplateResponse(request, "index.html", {"error": block_reason}, status_code=429
             )
 
+    # Process Coverage Insights (Beta) - council-reviewed and copy-locked,
+    # see claude/process-gap-analysis-design-consensus-2026-09-16.md and
+    # claude/process-coverage-insights-final-copy-2026-09-16.md. Paid-tier
+    # only (decision 6 of the consensus doc) - a trial run never builds a
+    # process_context, regardless of what was submitted, mirroring the same
+    # trial-exclusion pattern already used for client_test_data.
+    process_context = None
+    process_source_label = ""
+    if trial is None:
+        diagram_present = process_diagram_file is not None and bool(process_diagram_file.filename)
+        description_text = process_description.strip()
+        if diagram_present or description_text:
+            frame = process_frame.strip().lower()
+            if frame not in ("current", "target"):
+                return templates.TemplateResponse(request, "index.html",
+                    {"error": "Please choose whether your process diagram/description shows your current or target process."},
+                    status_code=400,
+                )
+            if diagram_present:
+                diagram_bytes = await process_diagram_file.read()
+                if diagram_bytes and len(diagram_bytes) <= MAX_IMAGE_BYTES and _validate_upload(process_diagram_file.filename, diagram_bytes):
+                    try:
+                        flow = parse_flow_diagrams(application, [(process_diagram_file.filename, diagram_bytes)], api_key)
+                        if flow.get("steps"):
+                            process_context = {"frame": frame, "steps": flow["steps"]}
+                            process_source_label = "diagram"
+                    except Exception as e:
+                        _log_and_ref(e, "parse_flow_diagrams failed for optional process diagram in /analyze")
+                        # Non-fatal - Process Coverage Insights is additive; a
+                        # failed diagram parse falls back to the description
+                        # text below if present, or is silently skipped.
+                if process_context is None and description_text:
+                    process_context = {"frame": frame, "raw_text": description_text}
+                    process_source_label = "description"
+            elif description_text:
+                process_context = {"frame": frame, "raw_text": description_text}
+                process_source_label = "description"
+
     run_id = uuid.uuid4().hex[:12]
     rl = run_logger.RunLog.start("generate_a", run_id, {
         "application": application,
         "filename": requirements_file.filename,
         "file_size": len(raw_bytes),
         "qa_model": os.environ.get("QA_MODEL"),
+        "process_context": process_source_label or None,
     })
     try:
         max_tcs = trial_signups.TRIAL_MAX_TEST_CASES if trial is not None else None
-        data = run_qa_analysis(application, req_text, api_key, max_test_cases=max_tcs)
+        data = run_qa_analysis(application, req_text, api_key, max_test_cases=max_tcs, process_context=process_context)
     except Exception as e:
         ref = _log_and_ref(e, "run_qa_analysis failed in /analyze")
         rl.finish("fail", {"correlation_ref": ref, "error": str(e)})
@@ -853,6 +895,17 @@ async def analyze(
     data["run_date"] = _melbourne_now_str()
     data["baseline_version"] = baseline_version.strip()
     data["initials"] = initials
+
+    # Process Coverage Insights (Beta) - persist what the model returned so
+    # the curation step (paid clients only) can show it for review/edit, and
+    # the final report can render it. "process_steps"/"uncovered_process_steps"
+    # come straight from the model's JSON when process_context was set above;
+    # default to empty so nothing downstream needs a None-check.
+    data["process_context_provided"] = process_context is not None
+    data["process_frame"] = (process_context or {}).get("frame", "")
+    data["process_source"] = process_source_label
+    data.setdefault("process_steps", [])
+    data.setdefault("uncovered_process_steps", [])
 
     # Client-supplied test data for custom workflows the automation cannot
     # create itself in one run (e.g. an employee who has already resigned
@@ -909,6 +962,11 @@ async def analyze(
                 "test_cases": data.get("test_scenarios", []),
                 "quota_note": quota_note,
                 "client_test_data_pii_flags": data.get("client_test_data_pii_flags", []),
+                "process_context_provided": data.get("process_context_provided", False),
+                "process_frame": data.get("process_frame", ""),
+                "process_source": data.get("process_source", ""),
+                "process_steps": data.get("process_steps", []),
+                "uncovered_process_steps": data.get("uncovered_process_steps", []),
                 "error": None,
                 "hide_trial_cta": True,
             },
@@ -977,6 +1035,11 @@ async def confirm_generated(request: Request, run_id: str, access_code: str = Fo
             {
                 "run_id": run_id, "application": data.get("application", ""),
                 "test_cases": data.get("test_scenarios", []), "quota_note": None, "error": msg,
+                "process_context_provided": data.get("process_context_provided", False),
+                "process_frame": data.get("process_frame", ""),
+                "process_source": data.get("process_source", ""),
+                "process_steps": data.get("process_steps", []),
+                "uncovered_process_steps": data.get("uncovered_process_steps", []),
                 "hide_trial_cta": True,
             },
             status_code=code,
@@ -995,6 +1058,30 @@ async def confirm_generated(request: Request, run_id: str, access_code: str = Fo
 
     data["test_scenarios"] = kept_cases
     data.pop("status", None)
+
+    # Process Coverage Insights (Beta) - the curation screen is where the
+    # client reviews/corrects the parsed process steps (per the consensus
+    # design: reuse this existing screen rather than add a new confirm-step),
+    # and where uncovered_process_steps gets recomputed against the KEPT test
+    # cases only, since discarding a test case can turn a covered step back
+    # into an uncovered one. A step is kept unless its checkbox was explicitly
+    # unchecked - matching the "anything you remove won't be included" copy.
+    # Editing a step's description/screen text is deliberately not offered
+    # here (v1 scope) - only keep/remove, to bound the size of this change;
+    # a misread step can still be discarded rather than corrected in place.
+    if data.get("process_context_provided"):
+        all_steps = data.get("process_steps", [])
+        # A checkbox absent from the submitted form means the client
+        # unchecked it (standard HTML checkbox semantics, same rule already
+        # used for keep_<tc_id> above).
+        kept_step_ids = {st.get("step_id") for st in all_steps if form.get(f"keep_process_{st.get('step_id')}")}
+        kept_steps = [st for st in all_steps if st.get("step_id") in kept_step_ids]
+        covered_step_ids = set()
+        for tc in kept_cases:
+            for sid in tc.get("flow_step_ids", []) or []:
+                covered_step_ids.add(sid)
+        data["process_steps"] = kept_steps
+        data["uncovered_process_steps"] = [st.get("step_id") for st in kept_steps if st.get("step_id") not in covered_step_ids]
 
     run_dir = RUNS_DIR / run_id
     html_path = run_dir / "report.html"
