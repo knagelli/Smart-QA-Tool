@@ -509,6 +509,48 @@ _EXT_EXPECTED_KIND = {
 }
 
 
+# --------------------------------------------------------------------------
+# Field length caps (governance, not content shaping) - see
+# claude/ux-investigation-required-field-markers-and-input-validation-2026-09-17.md
+# and the follow-up cap-sizing discussion in that same thread. Every number
+# here was picked to sit comfortably above the longest realistic value for
+# the platforms this tool already targets (Salesforce, SuccessFactors,
+# Workday, UKG, ServiceNow, Humanforce) - the goal is a backstop against
+# genuinely oversized/abusive input, not a "clean round number" that would
+# truncate normal client data. Enforced server-side here because a form's
+# HTML maxlength is a client-side convenience only and does not stop a
+# direct POST with a longer value.
+FIELD_MAX_LENGTHS = {
+    # short identifier / label
+    "flow_name": 60, "screen_or_stage": 60, "tc_id": 60,
+    # app / module / role names
+    "application": 100, "module": 100, "role_label": 100, "baseline_version": 100,
+    # test-case title
+    "title": 150,
+    # structured list field (comma-separated)
+    "inputs": 300,
+    # sandbox/UAT environment URL
+    "env_url": 300,
+    # login fields - generous on purpose (must never be the reason a real,
+    # valid username/password is rejected); password cap is an abuse
+    # ceiling only, per OWASP guidance against tight password-length caps
+    "username": 150, "password": 128,
+    # free-text / prose - generous, only guards against a genuinely
+    # oversized paste, never meant to shape normal sentence-length content
+    "decision_detail": 2000,
+}
+
+
+def _check_field_length(value: str, field_name: str) -> str | None:
+    """Returns an error message if value exceeds FIELD_MAX_LENGTHS[field_name],
+    else None. Unknown field_name is a programming error, not a user error -
+    raises so a typo'd key is caught in testing rather than silently no-op'ing."""
+    limit = FIELD_MAX_LENGTHS[field_name]
+    if len(value) > limit:
+        return f"{field_name.replace('_', ' ').capitalize()} must be {limit} characters or fewer (you entered {len(value)})."
+    return None
+
+
 def _validate_upload(filename: str, raw: bytes) -> bool:
     """Returns False if filename's extension implies a binary format whose
     signature doesn't match the actual bytes. Extensions with no reliable
@@ -772,6 +814,11 @@ async def analyze(
     except HTTPException as e:
         return templates.TemplateResponse(request, "index.html", {"error": e.detail}, status_code=e.status_code
         )
+
+    for field_name, field_value in (("application", application), ("baseline_version", baseline_version)):
+        length_error = _check_field_length(field_value, field_name)
+        if length_error:
+            return templates.TemplateResponse(request, "index.html", {"error": length_error}, status_code=400)
 
     raw_bytes = await requirements_file.read()
     if not raw_bytes:
@@ -1191,6 +1238,11 @@ async def analyze_custom(
         return templates.TemplateResponse(request, "index.html", {"error": msg, "active_tab": "custom"}, status_code=code
         )
 
+    for field_name, field_value in (("application", application), ("baseline_version", baseline_version)):
+        length_error = _check_field_length(field_value, field_name)
+        if length_error:
+            return err(length_error)
+
     brief_bytes = await brief_file.read()
     req_bytes = await requirements_file.read()
     diagram_reads = [(f.filename, await f.read()) for f in diagram_files if f.filename]
@@ -1279,26 +1331,40 @@ async def confirm_flow(request: Request, run_id: str):
     form = await request.form()
     step_count = int(form.get("step_count", "0") or 0)
 
+    flow_name_value = form.get("flow_name", pending["flow"].get("flow_name", "Main flow")).strip()
+    length_error = _check_field_length(flow_name_value, "flow_name")
+    if length_error:
+        raise HTTPException(status_code=400, detail=length_error)
+
     confirmed_steps = []
     for i in range(step_count):
         # A step can be removed on the review screen (its "keep" checkbox unchecked)
         if not form.get(f"keep_{i}"):
             continue
+        step_label = form.get(f"step_id_{i}", f"FLOW-{i+1:03d}")
+        screen_value = form.get(f"screen_{i}", "").strip()
         inputs_raw = form.get(f"inputs_{i}", "")
+        decision_detail_value = form.get(f"decision_detail_{i}", "").strip()
+        for field_name, field_value in (
+            ("screen_or_stage", screen_value), ("inputs", inputs_raw), ("decision_detail", decision_detail_value),
+        ):
+            length_error = _check_field_length(field_value, field_name)
+            if length_error:
+                raise HTTPException(status_code=400, detail=f"Step {step_label}: {length_error}")
         confirmed_steps.append({
-            "step_id": form.get(f"step_id_{i}", f"FLOW-{i+1:03d}"),
-            "screen_or_stage": form.get(f"screen_{i}", "").strip(),
+            "step_id": step_label,
+            "screen_or_stage": screen_value,
             "description": form.get(f"description_{i}", "").strip(),
             "inputs": [s.strip() for s in inputs_raw.split(",") if s.strip()],
             "decision_point": bool(form.get(f"decision_point_{i}")),
-            "decision_detail": form.get(f"decision_detail_{i}", "").strip(),
+            "decision_detail": decision_detail_value,
         })
 
     if not confirmed_steps:
         raise HTTPException(status_code=400, detail="At least one confirmed flow step is required to generate test coverage.")
 
     confirmed_flow = {
-        "flow_name": form.get("flow_name", pending["flow"].get("flow_name", "Main flow")).strip(),
+        "flow_name": flow_name_value,
         "parse_notes": pending["flow"].get("parse_notes", ""),
         "steps": confirmed_steps,
     }
@@ -1425,6 +1491,10 @@ async def import_tests(
         client_name = _check_access_no_trial(request, access_code)
     except HTTPException as e:
         return err(e.detail, code=e.status_code)
+
+    length_error = _check_field_length(application, "application")
+    if length_error:
+        return err(length_error)
 
     test_cases_files = [f for f in test_cases_files if f.filename]
     if not test_cases_files:
@@ -1599,10 +1669,16 @@ async def confirm_import(request: Request, run_id: str):
     for i in range(case_count):
         if not form.get(f"keep_{i}"):
             continue
+        tc_id_value = form.get(f"tc_id_{i}", f"TC-{i+1:03d}").strip()
+        title_value = form.get(f"title_{i}", "").strip()
+        for field_name, field_value in (("tc_id", tc_id_value), ("title", title_value)):
+            length_error = _check_field_length(field_value, field_name)
+            if length_error:
+                raise HTTPException(status_code=400, detail=f"Case {tc_id_value or i+1}: {length_error}")
         confirmed_cases.append({
-            "tc_id": form.get(f"tc_id_{i}", f"TC-{i+1:03d}").strip(),
+            "tc_id": tc_id_value,
             "req_id": "",
-            "title": form.get(f"title_{i}", "").strip(),
+            "title": title_value,
             "precondition": form.get(f"precondition_{i}", "").strip(),
             "steps": form.get(f"steps_{i}", "").strip(),
             "expected_result": form.get(f"expected_result_{i}", "").strip(),
@@ -1723,6 +1799,14 @@ async def execute_run(
 
     application = data.get("application", "")
     all_test_cases = {tc.get("tc_id"): tc for tc in data.get("test_scenarios", [])}
+
+    for field_name, field_value in (
+        ("role_label", role_label), ("module", module), ("env_url", env_url),
+        ("username", username), ("password", password),
+    ):
+        length_error = _check_field_length(field_value, field_name)
+        if length_error:
+            return err(length_error, test_cases=data.get("test_scenarios"), application=application)
 
     # Screenshot-count field: defaults to DEFAULT_MAX_SCREENSHOTS_PER_TEST
     # unless the client explicitly changes it; any value above
