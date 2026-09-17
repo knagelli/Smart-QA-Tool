@@ -182,9 +182,9 @@ def build_html(data):
             )
         proc_html = "\n".join(proc_rows) if proc_rows else '<tr><td colspan="4" class="empty">No process steps.</td></tr>'
         process_section = f"""
-<h2 class="st">Process Coverage Insights <span class="pill">BETA</span></h2>
+<h2 class="st">Process Coverage Insights <span class="pill beta">BETA</span></h2>
 <div class="callout">
-<strong>Process Coverage Insights (Beta)</strong> &mdash; These are process steps we found no test
+<strong>&#9888; Process Coverage Insights (Beta)</strong> &mdash; These are process steps we found no test
 coverage for, based on the {esc(data.get("process_source","diagram/description"))} you provided as
 your {frame_word} process. Some of these may be intentional &mdash; handled manually, by policy, or
 by a system outside this run &mdash; so please confirm before treating any of these as a real gap.
@@ -199,7 +199,7 @@ it's meant to support your own QA review, not replace it.
 </tbody></table></div>
 """
         process_stat_card = (
-            f'<div class="card warn"><div class="n">{len(uncovered_process_steps)}</div>'
+            f'<div class="card beta"><div class="n">{len(uncovered_process_steps)}</div>'
             f'<div class="l">Process Steps to Review<br><span style="font-size:10px">'
             f'of {len(process_steps)} total &mdash; see Process Coverage Insights below</span></div></div>'
         )
@@ -240,8 +240,10 @@ tbody tr:hover{{background:#F1F5F9}}tbody td{{padding:10px 14px;vertical-align:t
 .badge.gap{{background:var(--rbg);color:var(--red)}}
 .ft{{margin-top:48px;text-align:center;font-size:12px;color:var(--muted);
 border-top:1px solid var(--border);padding-top:20px}}
-.callout{{background:var(--sky);border:1px solid var(--blue);border-radius:8px;padding:14px 18px;
+.callout{{background:var(--pbg);border-left:3px solid var(--purple);border-radius:8px;padding:14px 18px;
 font-size:12.5px;color:var(--text);margin-bottom:14px;line-height:1.55}}
+.pill.beta{{background:var(--pbg);color:var(--purple)}}
+.card.beta .n{{color:var(--purple)}}
 @media print{{.tw{{overflow:visible}}body{{background:#fff}}}}
 </style></head><body><div class="wrap">
 <header class="hdr"><h1>Test Scenarios &amp; Requirements Traceability Report</h1>
@@ -517,8 +519,10 @@ tbody tr:hover{{background:#F1F5F9}}tbody td{{padding:10px 14px;vertical-align:t
 .badge.gap{{background:var(--rbg);color:var(--red)}}
 .ft{{margin-top:48px;text-align:center;font-size:12px;color:var(--muted);
 border-top:1px solid var(--border);padding-top:20px}}
-.callout{{background:var(--sky);border:1px solid var(--blue);border-radius:8px;padding:14px 18px;
+.callout{{background:var(--pbg);border-left:3px solid var(--purple);border-radius:8px;padding:14px 18px;
 font-size:12.5px;color:var(--text);margin-bottom:14px;line-height:1.55}}
+.pill.beta{{background:var(--pbg);color:var(--purple)}}
+.card.beta .n{{color:var(--purple)}}
 @media print{{.tw{{overflow:visible}}body{{background:#fff}}}}
 </style></head><body><div class="wrap">
 <header class="hdr"><h1>Custom Application &mdash; Test Coverage Report</h1>
