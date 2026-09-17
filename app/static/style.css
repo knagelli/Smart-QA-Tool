@@ -245,6 +245,7 @@ button:active,.btn:active{transform:scale(.98)}
 .site-ftr-col a:hover{color:#fff;text-decoration:underline}
 .site-ftr-bottom{border-top:1px solid rgba(255,255,255,.12);padding:18px 20px;text-align:center;
   font-size:12px;color:#9FA98F;max-width:1040px;margin:0 auto}
+.site-ftr-abn{display:block;margin-top:4px;font-size:11.5px;color:#8A9480}
 
 /* Hero two-column layout: copy on the left, a framed product mockup on the
    right on wide viewports. Stacks (mockup hidden) below 900px - see the
