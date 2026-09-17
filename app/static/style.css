@@ -157,6 +157,8 @@ button:active,.btn:active{transform:scale(.98)}
 .trace-table th{background:#F6ECD6}
 .step-card-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
 .step-card-hdr .step-id{font-family:monospace;font-size:12px;color:var(--blue);font-weight:700}
+.radio-row{display:flex;gap:18px;margin-top:4px}
+.radio-inline{display:flex;align-items:center;gap:6px;font-weight:400}
 .keep-toggle{display:flex;align-items:center;gap:6px;font-weight:600;margin-bottom:0}
 .keep-toggle input{margin:0}
 
