@@ -964,7 +964,7 @@ async def analyze(
     })
     try:
         max_tcs = trial_signups.TRIAL_MAX_TEST_CASES if trial is not None else None
-        data = run_qa_analysis(application, req_text, api_key, max_test_cases=max_tcs, process_context=process_context)
+        data = await asyncio.to_thread(run_qa_analysis, application, req_text, api_key, max_test_cases=max_tcs, process_context=process_context)
     except Exception as e:
         ref = _log_and_ref(e, "run_qa_analysis failed in /analyze")
         rl.finish("fail", {"correlation_ref": ref, "error": str(e)})
@@ -1423,7 +1423,8 @@ async def confirm_flow(request: Request, run_id: str):
         "qa_model": os.environ.get("QA_MODEL"),
     })
     try:
-        data = run_qa_analysis_custom(
+        data = await asyncio.to_thread(
+            run_qa_analysis_custom,
             application=pending["application"],
             brief_text=pending["brief_text"],
             flow=confirmed_flow,
@@ -1591,7 +1592,7 @@ async def import_tests(
             if not raw_text.strip():
                 continue
             try:
-                structured = structure_existing_test_cases(application, raw_text, api_key)
+                structured = await asyncio.to_thread(structure_existing_test_cases, application, raw_text, api_key)
             except Exception as e:
                 ref = _log_and_ref(e, "structure_existing_test_cases failed in /import-tests")
                 rl.finish("fail", {"correlation_ref": ref, "error": str(e), "filename": filename})
