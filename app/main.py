@@ -53,7 +53,7 @@ from typing import List
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, Request, UploadFile, File, Form, HTTPException, BackgroundTasks
-from fastapi.responses import HTMLResponse, FileResponse, PlainTextResponse, StreamingResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, FileResponse, PlainTextResponse, StreamingResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -672,9 +672,52 @@ def _sweep_completed_runs():
         pass
 
 
+# --------------------------------------------------------------------------
+# Canonical URL / sitemap (2026-09-17 - see claude/site-indexing-fix-...) -
+# Search Console reported "Page with redirect" for pages discovered via a
+# trailing-slash, http://, or www. variant, all of which correctly redirect
+# to https://req2qa.com/<path> (confirmed live) but leave Google with no
+# upfront signal of that canonical form. Fixing that is two additive pieces:
+# a self-referencing <link rel="canonical"> on every page, and a sitemap.xml
+# listing only the canonical URLs.
+#
+# SITE_BASE_URL has no trailing slash; every entry below is a bare path
+# (leading slash, no trailing slash) - keep both conventions consistent with
+# how the live redirects actually resolve (confirmed 2026-09-17: http,
+# https+www, and any trailing slash all converge on this exact form).
+#
+# PUBLIC_PAGE_PATHS is a deliberate, hand-maintained allowlist - NOT derived
+# from the route table - because this app also serves per-run report pages,
+# downloads, and admin routes that are access-code-gated, client-specific,
+# or time-limited, and must never appear in a sitemap. When a new static,
+# publicly-crawlable page is added to the site, add its path here too.
+SITE_BASE_URL = "https://req2qa.com"
+PUBLIC_PAGE_PATHS = ["/", "/about", "/security", "/privacy", "/terms", "/trial-signup", "/import-tests"]
+
+
+def _canonical_url(path: str) -> str:
+    # The root path is the one exception to "no trailing slash": confirmed
+    # live (2026-09-17) that https://req2qa.com resolves to https://req2qa.com/
+    # (trailing slash), matching the existing og:url meta tag in index.html -
+    # every other path resolves WITHOUT a trailing slash, per the same check.
+    return f"{SITE_BASE_URL}/" if path == "/" else f"{SITE_BASE_URL}{path}"
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    return templates.TemplateResponse(request, "index.html", {"error": None})
+    return templates.TemplateResponse(request, "index.html", {"error": None, "canonical_url": _canonical_url("/")})
+
+
+@app.get("/sitemap.xml", response_class=Response)
+async def sitemap_xml():
+    urls = "\n".join(f"  <url><loc>{_canonical_url(p)}</loc></url>" for p in PUBLIC_PAGE_PATHS)
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        f"{urls}\n"
+        "</urlset>\n"
+    )
+    return Response(content=xml, media_type="application/xml")
 
 
 # Static trust pages - no access code required, nothing sensitive is served.
@@ -686,22 +729,22 @@ _TRUST_PAGE_UPDATED = "2026-09-09"
 
 @app.get("/privacy", response_class=HTMLResponse)
 async def privacy(request: Request):
-    return templates.TemplateResponse(request, "privacy.html", {"updated_date": _TRUST_PAGE_UPDATED})
+    return templates.TemplateResponse(request, "privacy.html", {"updated_date": _TRUST_PAGE_UPDATED, "canonical_url": _canonical_url("/privacy")})
 
 
 @app.get("/terms", response_class=HTMLResponse)
 async def terms(request: Request):
-    return templates.TemplateResponse(request, "terms.html", {"updated_date": _TRUST_PAGE_UPDATED})
+    return templates.TemplateResponse(request, "terms.html", {"updated_date": _TRUST_PAGE_UPDATED, "canonical_url": _canonical_url("/terms")})
 
 
 @app.get("/security", response_class=HTMLResponse)
 async def security_page(request: Request):
-    return templates.TemplateResponse(request, "security.html", {"updated_date": _TRUST_PAGE_UPDATED})
+    return templates.TemplateResponse(request, "security.html", {"updated_date": _TRUST_PAGE_UPDATED, "canonical_url": _canonical_url("/security")})
 
 
 @app.get("/about", response_class=HTMLResponse)
 async def about_page(request: Request):
-    return templates.TemplateResponse(request, "about.html", {})
+    return templates.TemplateResponse(request, "about.html", {"canonical_url": _canonical_url("/about")})
 
 
 # --------------------------------------------------------------------------
@@ -712,7 +755,7 @@ async def about_page(request: Request):
 # --------------------------------------------------------------------------
 @app.get("/trial-signup", response_class=HTMLResponse)
 async def trial_signup_form(request: Request, error: str = ""):
-    return templates.TemplateResponse(request, "trial_signup.html", {"error": error})
+    return templates.TemplateResponse(request, "trial_signup.html", {"error": error, "canonical_url": _canonical_url("/trial-signup")})
 
 
 @app.post("/trial-signup", response_class=HTMLResponse)
@@ -783,7 +826,7 @@ async def robots_txt():
     # /admin is password-gated regardless (this is presentation, not access
     # control) - excluding it just keeps the internal dashboard out of
     # search results rather than have "req2qa.com admin login" indexable.
-    return "User-agent: *\nAllow: /\nDisallow: /admin\n"
+    return f"User-agent: *\nAllow: /\nDisallow: /admin\n\nSitemap: {SITE_BASE_URL}/sitemap.xml\n"
 
 
 @app.post("/analyze", response_class=HTMLResponse)
@@ -1468,7 +1511,7 @@ def _sweep_pending_imports():
 
 @app.get("/import-tests", response_class=HTMLResponse)
 async def import_tests_form(request: Request):
-    return templates.TemplateResponse(request, "import_tests.html", {"error": None})
+    return templates.TemplateResponse(request, "import_tests.html", {"error": None, "canonical_url": _canonical_url("/import-tests")})
 
 
 @app.post("/import-tests", response_class=HTMLResponse)
