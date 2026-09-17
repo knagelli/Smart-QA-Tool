@@ -46,6 +46,35 @@
       <input type="password" name="access_code" required autocomplete="off">
     </label>
 
+    {% if process_context_provided %}
+    <div class="step-card" style="border-color:var(--blue,#3a7bd5)">
+      <h3 style="margin-top:0">Process Coverage Insights (Beta) &mdash; review the process we understood from your {{ process_source or "diagram/description" }}</h3>
+      <p class="opt">
+        Below is the {{ "target (to-be)" if process_frame == "target" else "current (as-is)" }} process we
+        identified, broken into steps. If any step is wrong, doesn't belong, or doesn't reflect your actual
+        process, uncheck it &mdash; it will be dropped from the process coverage findings. Steps below marked
+        "no matching test case yet" are flagged for your review, not marked as errors: some may be handled
+        manually, by policy, or by a system outside this run.
+      </p>
+      {% for st in process_steps %}
+      <div class="step-card">
+        <div class="step-card-hdr">
+          <label class="keep-toggle">
+            <input type="checkbox" name="keep_process_{{ st.step_id }}" checked>
+            Keep this step
+          </label>
+          <span class="step-id">{{ st.step_id }}</span>
+        </div>
+        <p><strong>{{ st.screen_or_stage }}</strong></p>
+        <p class="opt">{{ st.description }}</p>
+        {% if st.step_id in uncovered_process_steps %}
+        <p class="opt" style="color:var(--warn,#a15c00)">No matching test case yet</p>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
     {% for tc in test_cases %}
     <div class="step-card">
       <div class="step-card-hdr">

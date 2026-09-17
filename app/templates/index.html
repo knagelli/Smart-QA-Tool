@@ -400,6 +400,60 @@
         })();
       </script>
 
+      <div id="process-coverage-field">
+        <h3 style="margin-bottom:4px">Process Coverage Insights <span class="opt">(Beta, optional)</span></h3>
+        <p class="hint" style="margin-top:0">
+          Requirement traceability tells you whether every requirement has a test case. This goes a step
+          further: it checks whether every real step in your actual process is exercised by a test case
+          &mdash; including steps that don't map cleanly to any single requirement. This is one input among
+          many and needs your review; it isn't a substitute for your own QA judgment.
+        </p>
+
+        <label>Process diagram <span class="opt">(optional)</span>
+          <input type="file" name="process_diagram_file" accept=".png,.jpg,.jpeg,.webp,.pdf">
+          <span class="hint">Visio/draw.io/BPMN export or a clear photo/PDF of your process flow.</span>
+        </label>
+
+        <label>Or describe your process in words <span class="opt">(optional)</span>
+          <textarea name="process_description" rows="3" placeholder="e.g. Employee submits leave request -> manager approves or rejects -> payroll is notified -> ..."></textarea>
+          <span class="hint">Use this if you don't have a diagram handy. Skip both fields if you only want requirement traceability.</span>
+        </label>
+
+        <label id="process-frame-label">Does this show your <strong>current</strong> or <strong>target</strong> process? <span class="opt">(required if you provided a diagram or description above)</span>
+          <span class="radio-row">
+            <label class="radio-inline"><input type="radio" name="process_frame" value="current"> Current (as-is)</label>
+            <label class="radio-inline"><input type="radio" name="process_frame" value="target"> Target (to-be)</label>
+          </span>
+          <span class="hint">This matters: for a target/to-be process, a step with no test coverage may just mean that part isn't built yet, not a testing gap.</span>
+        </label>
+      </div>
+      <script>
+        // Process Coverage Insights is paid-tier only, same trial-exclusion
+        // pattern as the client_test_data field above - the server
+        // independently ignores these fields for trial access codes
+        // regardless of what's submitted, so hiding here is presentation
+        // only, not a security control.
+        (function () {
+          var codeInput = document.getElementById("analyze-access-code");
+          var field = document.getElementById("process-coverage-field");
+          if (!codeInput || !field) return;
+          function sync() {
+            var isTrial = codeInput.value.trim().toUpperCase().startsWith("TRIAL-");
+            field.hidden = isTrial;
+            if (isTrial) {
+              var fileInput = field.querySelector('input[type=file]');
+              var textarea = field.querySelector('textarea');
+              var radios = field.querySelectorAll('input[type=radio]');
+              if (fileInput) fileInput.value = "";
+              if (textarea) textarea.value = "";
+              radios.forEach(function (r) { r.checked = false; });
+            }
+          }
+          codeInput.addEventListener("input", sync);
+          sync();
+        })();
+      </script>
+
       <label>Your name or initials <span class="opt">(optional)</span>
         <input type="text" name="initials" maxlength="40" placeholder="e.g. JD">
         <span class="hint">Lets you filter to just your own runs later in <a href="/history">Run History</a> if your team shares one access code.</span>
