@@ -140,6 +140,25 @@ button:active,.btn:active{transform:scale(.98)}
   background:var(--sky);border-radius:14px;padding:14px 16px}
 .mode-pill{display:inline-block;margin-top:8px;font-size:11px;font-weight:600;background:var(--sky);
   color:var(--blue);padding:3px 10px;border-radius:20px}
+.mode-pill.accent-purple{background:var(--pbg);color:var(--purple);margin-top:0;margin-left:8px;
+  vertical-align:middle;text-transform:uppercase;letter-spacing:.03em}
+
+/* Feature panel - a distinct sub-card inside a form for an optional,
+   named beta feature (e.g. Process Coverage Insights), so it reads as
+   its own thing rather than blending into the ordinary field list. */
+.feature-panel{border:1px solid var(--pbg);background:linear-gradient(180deg,var(--pbg) 0%,rgba(243,228,211,0) 90px);
+  border-radius:14px;padding:18px 20px 4px;margin-bottom:22px}
+.feature-panel-hdr{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.feature-panel-hdr h3{font-family:'Fraunces',Georgia,serif;font-size:16px;font-weight:600;
+  color:var(--navy);margin:0}
+.feature-icon-badge{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;
+  justify-content:center;flex:0 0 auto;background:#fff;color:var(--purple)}
+.status-badge{display:inline-block;font-size:11px;font-weight:600;padding:2px 9px;
+  border-radius:20px;white-space:nowrap}
+.status-badge.covered{background:var(--sky);color:var(--blue)}
+.status-badge.gap{background:var(--rbg);color:var(--red)}
+.step-card.gap{border-left:3px solid var(--red)}
+.step-card.covered{border-left:3px solid var(--blue)}
 .form textarea{display:block;width:100%;margin-top:6px;padding:11px 14px;border:1px solid var(--border);
   /* Same 16px floor as the input rule above, same iOS Safari zoom reason. */
   border-radius:10px;font-size:16px;font-family:inherit;resize:vertical;background:#fff}
