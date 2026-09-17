@@ -47,17 +47,23 @@
     </label>
 
     {% if process_context_provided %}
-    <div class="step-card" style="border-color:var(--blue,#3a7bd5)">
-      <h3 style="margin-top:0">Process Coverage Insights (Beta) &mdash; review the process we understood from your {{ process_source or "diagram/description" }}</h3>
-      <p class="opt">
-        Below is the {{ "target (to-be)" if process_frame == "target" else "current (as-is)" }} process we
-        identified, broken into steps. If any step is wrong, doesn't belong, or doesn't reflect your actual
-        process, uncheck it &mdash; it will be dropped from the process coverage findings. Steps below marked
-        "no matching test case yet" are flagged for your review, not marked as errors: some may be handled
-        manually, by policy, or by a system outside this run.
+    <div class="feature-panel">
+      <div class="feature-panel-hdr">
+        <span class="feature-icon-badge">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>
+        </span>
+        <h3>Process Coverage Insights <span class="mode-pill accent-purple">BETA</span></h3>
+      </div>
+      <p class="hint" style="margin-top:0">
+        Review the {{ "target (to-be)" if process_frame == "target" else "current (as-is)" }} process we
+        understood from your {{ process_source or "diagram/description" }}, broken into steps. If any step
+        is wrong, doesn't belong, or doesn't reflect your actual process, uncheck it &mdash; it will be dropped
+        from the process coverage findings. Steps marked <span class="status-badge gap">NO MATCHING TEST CASE</span>
+        are flagged for your review, not marked as errors: some may be handled manually, by policy, or by a
+        system outside this run.
       </p>
       {% for st in process_steps %}
-      <div class="step-card">
+      <div class="step-card {{ 'gap' if st.step_id in uncovered_process_steps else 'covered' }}">
         <div class="step-card-hdr">
           <label class="keep-toggle">
             <input type="checkbox" name="keep_process_{{ st.step_id }}" checked>
@@ -68,7 +74,9 @@
         <p><strong>{{ st.screen_or_stage }}</strong></p>
         <p class="opt">{{ st.description }}</p>
         {% if st.step_id in uncovered_process_steps %}
-        <p class="opt" style="color:var(--warn,#a15c00)">No matching test case yet</p>
+        <p><span class="status-badge gap">NO MATCHING TEST CASE</span></p>
+        {% else %}
+        <p><span class="status-badge covered">MATCHED TO A TEST CASE</span></p>
         {% endif %}
       </div>
       {% endfor %}
