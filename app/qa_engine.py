@@ -41,6 +41,15 @@ TASK:
    Assign each scenario a unique tc_id (TC-001, TC-002, ... across the whole
    response, not per requirement). Each scenario needs: tc_id, req_id, title,
    precondition, steps (numbered, joined with \\n), expected_result, fixture_role.
+3b. If a scenario's steps involve attaching/uploading a file (e.g. "attach a
+   medical certificate", "upload a supporting document"), also include
+   attachment_filename (a realistic filename matching what the requirement
+   describes, e.g. "medical_certificate.pdf") and attachment_type (the file
+   extension without a dot, e.g. "pdf", "docx", "png" - pick "pdf" if the
+   requirement doesn't imply a specific format). A generic test file with
+   this name is generated automatically at execution time - never write
+   steps that assume a specific real file already exists on disk. Omit both
+   fields entirely for scenarios that don't involve a file attachment.
 4. Independence & data safety (important): each scenario must be self-contained
    and independently runnable - never write steps that assume data created by
    another scenario in this same batch or by a previous run (e.g. do not write
@@ -73,9 +82,12 @@ OUTPUT: respond with ONLY this JSON object (no other text):
     {{"req_id": "REQ-001", "requirement": "<verbatim or lightly cleaned requirement text>", "valid_for_app": true, "notes": ""}}
   ],
   "test_scenarios": [
-    {{"tc_id": "TC-001", "req_id": "REQ-001", "title": "...", "precondition": "...", "steps": "1. ...\\n2. ...", "expected_result": "...", "fixture_role": "none"}}
+    {{"tc_id": "TC-001", "req_id": "REQ-001", "title": "...", "precondition": "...", "steps": "1. ...\\n2. ...", "expected_result": "...", "fixture_role": "none"}},
+    {{"tc_id": "TC-002", "req_id": "REQ-002", "title": "...", "precondition": "...", "steps": "1. ...\\n2. ...", "expected_result": "...", "fixture_role": "none", "attachment_filename": "medical_certificate.pdf", "attachment_type": "pdf"}}
   ]
 }}
+(attachment_filename/attachment_type are optional - include them only on a
+scenario that actually involves a file upload, as in the TC-002 example above.)
 """
 
 
