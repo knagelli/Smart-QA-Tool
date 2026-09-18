@@ -42,10 +42,6 @@
   {% endif %}
 
   <form class="card form" action="/confirm-generated/{{ run_id }}" method="post">
-    <label>Your access code
-      <input type="password" name="access_code" required autocomplete="off">
-    </label>
-
     {% if process_context_provided %}
     <div class="feature-panel">
       <div class="feature-panel-hdr">
@@ -83,21 +79,37 @@
     </div>
     {% endif %}
 
-    {% for tc in test_cases %}
-    <div class="step-card">
-      <div class="step-card-hdr">
-        <label class="keep-toggle">
-          <input type="checkbox" name="keep_{{ tc.tc_id }}" checked>
-          Keep this test case
-        </label>
-        <span class="step-id">{{ tc.tc_id }}</span>
-      </div>
-      <p><strong>{{ tc.title }}</strong></p>
-      {% if tc.precondition %}<p class="opt">Precondition: {{ tc.precondition }}</p>{% endif %}
-      <p class="opt">{{ tc.steps }}</p>
-      <p class="opt">Expected: {{ tc.expected_result }}</p>
+    {% if test_cases %}
+    <div class="tc-toolbar">
+      <input type="text" id="tc-search" placeholder="Search test cases by title or ID&hellip;" autocomplete="off">
+      <span class="hint" id="tc-count-line"></span>
     </div>
-    {% endfor %}
+    {% endif %}
+
+    <div id="tc-list">
+      {% for tc in test_cases %}
+      <div class="step-card js-tc-card" data-search="{{ (tc.tc_id ~ ' ' ~ tc.title) | lower }}">
+        <div class="step-card-hdr">
+          <label class="keep-toggle">
+            <input type="checkbox" name="keep_{{ tc.tc_id }}" checked>
+            Keep this test case
+          </label>
+          <span class="step-id">{{ tc.tc_id }}</span>
+        </div>
+        <p>
+          <button type="button" class="js-tc-expand tc-expand-arrow" aria-expanded="false">&#9656;</button>
+          <strong>{{ tc.title }}</strong>
+        </p>
+        <div class="js-tc-details" hidden>
+          {% if tc.precondition %}<p class="opt">Precondition: {{ tc.precondition }}</p>{% endif %}
+          <p class="opt">{{ tc.steps }}</p>
+          <p class="opt">Expected: {{ tc.expected_result }}</p>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <div class="tc-pagination" id="tc-pagination"></div>
 
     <button type="submit">Confirm Kept Test Cases</button>
   </form>
@@ -105,5 +117,6 @@
   <p class="footnote"><a href="/">&larr; Start over</a></p>
 </div>
 {% include "_footer.html" %}
+<script src="/static/review_generated_paginate.js" defer></script>
 </body>
 </html>
