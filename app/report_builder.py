@@ -124,6 +124,21 @@ _FIXTURE_TOKEN_RE = re.compile(r"\{\{FIXTURE:([\w.]+)\}\}")
 
 _SAMPLE_TOKEN_WORDS = ["Jordan", "Avery", "Rowan", "Kalyani", "Devon", "Priya", "Reeve", "Sasha"]
 
+# A name-shaped sample word (e.g. "Rowan") is wrong for a field that clearly
+# isn't a name - an Employee ID, a reference/ticket/account number, a SKU,
+# a code. Detecting the exact field type from arbitrary generator text was
+# rejected earlier as too unreliable (there's no controlled vocabulary), but
+# this is a narrower, safer check: does the ONE sentence containing the
+# token mention "ID"/"code"/"SKU"/"number" as a whole word at all - a coarse
+# binary signal, not a precise field-name match. When it does, use a
+# code-shaped sample value instead of a name; the default (no match) stays
+# a name, which is still correct for the common case (first/last name,
+# email, department, etc). This is a heuristic with a safe default, not a
+# guarantee - flag any other field-type mismatch you spot so the keyword
+# list below can grow to cover it.
+_ID_LIKE_CONTEXT_RE = re.compile(r"\b(id|code|sku|number)\b", re.IGNORECASE)
+_CODE_SAMPLE_WORDS = ["EMP-1042", "REF-2087", "ID-3159", "COD-4821", "SKU-5230", "NUM-6104", "KEY-7288", "TAG-8317"]
+
 
 def humanize_steps(steps_text, seed=""):
     """Display-only rewrite of a test scenario's steps text: replaces the
@@ -138,10 +153,15 @@ def humanize_steps(steps_text, seed=""):
     in one place.
 
     {{UNIQUE}} (always attached to some generator-invented prefix, e.g.
-    "AutoTest_{{UNIQUE}}") is replaced with a plain sample word - no
-    number/suffix (a trailing number, e.g. "Jordan214", is itself a
+    "AutoTest_{{UNIQUE}}") is replaced with a plain sample value - no
+    number/suffix beyond what the value itself carries (an earlier version
+    appended a number to a name, e.g. "Jordan214", which is itself a
     giveaway the value is machine-generated) and no clause describing the
-    generation mechanism. Word choice is explained under "seed" below.
+    generation mechanism. The sample is drawn from one of two pools -
+    name-like words, or code-like values (see _ID_LIKE_CONTEXT_RE above)
+    for a field whose enclosing sentence reads as an ID/code/number, so an
+    Employee ID field doesn't get a person's name as its example value.
+    Word/value choice is explained further under "seed" below.
 
     Critically, the replacement must not read as a literal instruction to
     type that exact word - a reader (especially in a downloaded report,
@@ -205,9 +225,18 @@ def humanize_steps(steps_text, seed=""):
         return steps_text
 
     def _unique_repl(m):
+        # The one sentence containing this token - used only to check for an
+        # ID/code/number-like context, never to infer the exact field name.
+        sent_start = steps_text.rfind(".", 0, m.start())
+        sent_start = sent_start + 1 if sent_start != -1 else 0
+        sent_end = steps_text.find(".", m.end())
+        sent_end = sent_end if sent_end != -1 else len(steps_text)
+        sentence = steps_text[sent_start:sent_end]
+
+        pool = _CODE_SAMPLE_WORDS if _ID_LIKE_CONTEXT_RE.search(sentence) else _SAMPLE_TOKEN_WORDS
         key = f"{seed}|{m.group(0)}"
-        idx = zlib.crc32(key.encode("utf-8")) % len(_SAMPLE_TOKEN_WORDS)
-        word = _SAMPLE_TOKEN_WORDS[idx]
+        idx = zlib.crc32(key.encode("utf-8")) % len(pool)
+        word = pool[idx]
         leading_quote, trailing_quote = m.group(1), m.group(2)
         if leading_quote and trailing_quote:
             # Token stands alone in its own quotes - safe to drop them and
