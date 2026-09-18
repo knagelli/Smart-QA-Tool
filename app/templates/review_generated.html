@@ -101,9 +101,9 @@
           <strong>{{ tc.title }}</strong>
         </p>
         <div class="js-tc-details" hidden>
-          {% if tc.precondition %}<p class="opt">Precondition: {{ tc.precondition }}</p>{% endif %}
-          <p class="opt">{{ tc.steps | humanize_steps }}</p>
-          <p class="opt">Expected: {{ tc.expected_result }}</p>
+          {% if tc.precondition %}<p class="opt">Precondition: {{ tc.precondition | humanize_steps(tc.tc_id) }}</p>{% endif %}
+          <p class="opt">{{ tc.steps | humanize_steps(tc.tc_id) }}</p>
+          <p class="opt">Expected: {{ tc.expected_result | humanize_steps(tc.tc_id) }}</p>
         </div>
       </div>
       {% endfor %}
