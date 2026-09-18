@@ -112,7 +112,12 @@ def nl2br(s):
 # live-execution time, by execute_engine.py, which pattern-matches on these
 # EXACT strings - this function must never be applied to the stored
 # data.json steps string itself, only to a copy used for human display.
-_UNIQUE_TOKEN_RE = re.compile(r"[\w-]*\{\{UNIQUE\}\}")
+# Captures an optional immediately-surrounding quote character on each side
+# (group 1 / group 3) so the replacement can tell a token that stands alone
+# in its own quotes (e.g. 'AutoTest_{{UNIQUE}}') - the common case - apart
+# from one glued into a larger literal with no quote boundary right at the
+# token (e.g. user_{{UNIQUE}}@test.com, inside its own outer quotes).
+_UNIQUE_TOKEN_RE = re.compile(r"(['\"])?[\w-]*\{\{UNIQUE\}\}(['\"])?")
 _FIXTURE_TOKEN_RE = re.compile(r"\{\{FIXTURE:([\w.]+)\}\}")
 
 
@@ -132,13 +137,34 @@ def humanize_steps(steps_text):
     in one place.
 
     {{UNIQUE}} (always attached to some generator-invented prefix, e.g.
-    "AutoTest_{{UNIQUE}}") is replaced with a single clean, human-looking
-    sample value (a short name-like word + a fixed number) instead of a
-    clause describing the generation mechanism - a business reader doesn't
-    need to know the value is auto-generated, just what a plausible value
-    looks like. Successive {{UNIQUE}} tokens in the same steps text cycle
-    through a small fixed word list so a multi-field scenario (first/middle/
-    last name) doesn't show the same word three times.
+    "AutoTest_{{UNIQUE}}") is replaced with a plain sample word - no
+    number/suffix (a trailing number, e.g. "Jordan214", is itself a
+    giveaway the value is machine-generated) and no clause describing the
+    generation mechanism. Successive {{UNIQUE}} tokens in the same steps
+    text cycle through a small fixed word list so a multi-field scenario
+    (first/middle/last name) doesn't show the same word three times.
+
+    Critically, the replacement must not read as a literal instruction to
+    type that exact word - a reader (especially in a downloaded report,
+    where there's no separate UI element to explain this) could otherwise
+    reasonably assume "Jordan" is mandatory. So whenever the token stands
+    alone in its own quotes - the common case the generator produces, e.g.
+    'AutoTest_{{UNIQUE}}' - the quotes are dropped and replaced with an
+    inline "e.g." right at the value: 'Jordan' becomes (e.g. "Jordan"),
+    so the step reads "Enter (e.g. "Jordan") in the First Name field."
+    signaling "example" exactly where the reader is looking, not in a
+    disconnected note elsewhere (an earlier version put a single clarifying
+    sentence at the end of the whole steps text instead - dropped because
+    a reader scanning line-by-line in a long downloaded report, especially
+    a wrapped Excel cell, could easily miss a note that far from the
+    specific line it applies to).
+
+    When the token is instead glued into a larger literal with no quote
+    boundary right at the token itself (e.g. user_{{UNIQUE}}@test.com),
+    inserting "(e.g. ...)" there would break the literal, so it falls back
+    to a bare word substitution in that narrower case only (tested
+    explicitly below/in the test suite - this was a real bug in an earlier
+    version, caught before shipping).
 
     {{FIXTURE:<type>.<attr>}} is replaced with a phrase describing which
     earlier record's data is being reused. When two or more FIXTURE tokens
@@ -164,7 +190,15 @@ def humanize_steps(steps_text):
     def _unique_repl(m):
         word = _SAMPLE_TOKEN_WORDS[_word_counter[0] % len(_SAMPLE_TOKEN_WORDS)]
         _word_counter[0] += 1
-        return f"{word}214"
+        leading_quote, trailing_quote = m.group(1), m.group(2)
+        if leading_quote and trailing_quote:
+            # Token stands alone in its own quotes - safe to drop them and
+            # signal "example" right here.
+            return f'(e.g. "{word}")'
+        # Glued into a larger literal (e.g. an email local-part) - adding
+        # words here would corrupt that literal, so keep it a bare word and
+        # preserve whichever single quote character was actually present.
+        return (leading_quote or "") + word + (trailing_quote or "")
 
     text = _UNIQUE_TOKEN_RE.sub(_unique_repl, steps_text)
 
