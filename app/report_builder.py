@@ -59,6 +59,7 @@ sheet/section and in the traceability matrix as NOT_TESTABLE.
 """
 import json
 import re
+import zlib
 import sys
 import html
 from collections import defaultdict
@@ -124,7 +125,7 @@ _FIXTURE_TOKEN_RE = re.compile(r"\{\{FIXTURE:([\w.]+)\}\}")
 _SAMPLE_TOKEN_WORDS = ["Jordan", "Avery", "Rowan", "Kalyani", "Devon", "Priya", "Reeve", "Sasha"]
 
 
-def humanize_steps(steps_text):
+def humanize_steps(steps_text, seed=""):
     """Display-only rewrite of a test scenario's steps text: replaces the
     raw {{UNIQUE}}/{{FIXTURE:...}} placeholder tokens (meaningful to
     execute_engine.py, meaningless-looking to a human reviewer - see
@@ -140,9 +141,7 @@ def humanize_steps(steps_text):
     "AutoTest_{{UNIQUE}}") is replaced with a plain sample word - no
     number/suffix (a trailing number, e.g. "Jordan214", is itself a
     giveaway the value is machine-generated) and no clause describing the
-    generation mechanism. Successive {{UNIQUE}} tokens in the same steps
-    text cycle through a small fixed word list so a multi-field scenario
-    (first/middle/last name) doesn't show the same word three times.
+    generation mechanism. Word choice is explained under "seed" below.
 
     Critically, the replacement must not read as a literal instruction to
     type that exact word - a reader (especially in a downloaded report,
@@ -181,15 +180,34 @@ def humanize_steps(steps_text):
     builders, Jinja's own autoescaping for the two templates), exactly as
     they already do for any other field. Never mutates or returns anything
     that gets written back to data.json - execute_engine.py must keep
-    seeing the original, unmodified tokens."""
+    seeing the original, unmodified tokens.
+
+    seed should be the scenario's tc_id, passed identically by every caller
+    that humanizes more than one field (precondition/steps/expected_result)
+    for the same test case. Word selection for {{UNIQUE}} is a deterministic
+    function of (seed, the exact matched prefix+token text) rather than a
+    per-call counter, because execute_engine.py's substitute_unique_token()
+    substitutes the SAME real value for every {{UNIQUE}} occurrence sharing
+    that literal text across an entire scenario - including across its
+    different fields, not just within one field's text. A real example that
+    exposed this: a scenario had 'EMP-AUTO-{{UNIQUE}}' appear identically in
+    its precondition, steps, and expected_result (verifying an overridden
+    Employee ID echoes back correctly) - an earlier version of this function
+    picked an independent sample word for each field, so the precondition,
+    steps, and expected result each showed a DIFFERENT example value for
+    what is actually the same real value, which is more misleading than
+    showing the raw token. Keying on the literal prefix+token text (not
+    just the seed) still lets genuinely different fields in the same
+    scenario - e.g. 'AutoTest_{{UNIQUE}}' for First Name vs
+    'LastAutoTest_{{UNIQUE}}' for Last Name - get different sample words,
+    since their literal text differs."""
     if not steps_text:
         return steps_text
 
-    _word_counter = [0]
-
     def _unique_repl(m):
-        word = _SAMPLE_TOKEN_WORDS[_word_counter[0] % len(_SAMPLE_TOKEN_WORDS)]
-        _word_counter[0] += 1
+        key = f"{seed}|{m.group(0)}"
+        idx = zlib.crc32(key.encode("utf-8")) % len(_SAMPLE_TOKEN_WORDS)
+        word = _SAMPLE_TOKEN_WORDS[idx]
         leading_quote, trailing_quote = m.group(1), m.group(2)
         if leading_quote and trailing_quote:
             # Token stands alone in its own quotes - safe to drop them and
@@ -261,9 +279,9 @@ def build_html(data):
             f'<tr><td><strong>{esc(s.get("tc_id",""))}</strong></td>'
             f'<td>{esc(s.get("req_id",""))}</td>'
             f'<td>{esc(s.get("title",""))}</td>'
-            f'<td>{esc(s.get("precondition",""))}</td>'
-            f'<td>{nl2br(humanize_steps(s.get("steps","")))}</td>'
-            f'<td>{esc(s.get("expected_result",""))}</td></tr>'
+            f'<td>{esc(humanize_steps(s.get("precondition", ""), s.get("tc_id", "")))}</td>'
+            f'<td>{nl2br(humanize_steps(s.get("steps", ""), s.get("tc_id", "")))}</td>'
+            f'<td>{esc(humanize_steps(s.get("expected_result", ""), s.get("tc_id", "")))}</td></tr>'
         )
     tc_html = "\n".join(tc_rows) if tc_rows else '<tr><td colspan="6" class="empty">No test scenarios generated.</td></tr>'
 
@@ -464,8 +482,8 @@ def build_xlsx(data, out_path):
     for s in data.get("test_scenarios", []):
         ws2.append(xl_row([
             s.get("tc_id", ""), s.get("req_id", ""), s.get("title", ""),
-            s.get("precondition", ""), humanize_steps(s.get("steps", "")).replace("\\n", "\n"),
-            s.get("expected_result", ""),
+            humanize_steps(s.get("precondition", ""), s.get("tc_id", "")), humanize_steps(s.get("steps", ""), s.get("tc_id", "")).replace("\\n", "\n"),
+            humanize_steps(s.get("expected_result", ""), s.get("tc_id", "")),
         ]))
         r = ws2.max_row
         for c in range(1, 7):
@@ -559,8 +577,8 @@ def build_html_custom(data, flow):
             f'<td>{esc(s.get("req_id",""))}</td>'
             f'<td class="tc-ids">{esc(", ".join(s.get("flow_step_ids", [])) or "-")}</td>'
             f'<td>{esc(s.get("title",""))}</td>'
-            f'<td>{esc(s.get("precondition",""))}</td>'
-            f'<td>{nl2br(humanize_steps(s.get("steps","")))}</td><td>{esc(s.get("expected_result",""))}</td></tr>'
+            f'<td>{esc(humanize_steps(s.get("precondition", ""), s.get("tc_id", "")))}</td>'
+            f'<td>{nl2br(humanize_steps(s.get("steps", ""), s.get("tc_id", "")))}</td><td>{esc(humanize_steps(s.get("expected_result", ""), s.get("tc_id", "")))}</td></tr>'
         )
     tc_html = "\n".join(tc_rows) if tc_rows else '<tr><td colspan="7" class="empty">No test scenarios generated.</td></tr>'
 
@@ -752,8 +770,8 @@ def build_xlsx_custom(data, flow, out_path):
     for s in data.get("test_scenarios", []):
         ws2.append(xl_row([
             s.get("tc_id", ""), s.get("req_id", ""), ", ".join(s.get("flow_step_ids", [])),
-            s.get("title", ""), s.get("precondition", ""),
-            humanize_steps(s.get("steps", "")).replace("\\n", "\n"), s.get("expected_result", ""),
+            s.get("title", ""), humanize_steps(s.get("precondition", ""), s.get("tc_id", "")),
+            humanize_steps(s.get("steps", ""), s.get("tc_id", "")).replace("\\n", "\n"), humanize_steps(s.get("expected_result", ""), s.get("tc_id", "")),
         ]))
         r = ws2.max_row
         for c in range(1, 8):
