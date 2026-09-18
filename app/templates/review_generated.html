@@ -102,7 +102,7 @@
         </p>
         <div class="js-tc-details" hidden>
           {% if tc.precondition %}<p class="opt">Precondition: {{ tc.precondition }}</p>{% endif %}
-          <p class="opt">{{ tc.steps }}</p>
+          <p class="opt">{{ tc.steps | humanize_steps }}</p>
           <p class="opt">Expected: {{ tc.expected_result }}</p>
         </div>
       </div>
