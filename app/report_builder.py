@@ -116,16 +116,39 @@ _UNIQUE_TOKEN_RE = re.compile(r"[\w-]*\{\{UNIQUE\}\}")
 _FIXTURE_TOKEN_RE = re.compile(r"\{\{FIXTURE:([\w.]+)\}\}")
 
 
+_SAMPLE_TOKEN_WORDS = ["Jordan", "Avery", "Rowan", "Kalyani", "Devon", "Priya", "Reeve", "Sasha"]
+
+
 def humanize_steps(steps_text):
     """Display-only rewrite of a test scenario's steps text: replaces the
     raw {{UNIQUE}}/{{FIXTURE:...}} placeholder tokens (meaningful to
     execute_engine.py, meaningless-looking to a human reviewer - see
     claude/council-brainstorm-human-readable-placeholder-tokens-2026-09-19.md)
-    with a plain-language phrase describing what will happen, without
-    changing anything else in the text. Called at every point steps text is
-    rendered for a human to read (review_generated.html, review_import.html,
-    and all four report/xlsx builders below) - one function, reused
-    everywhere, so the wording only ever needs to be right in one place.
+    with plain-language text, without changing anything else in the steps.
+    Called at every point steps text is rendered for a human to read
+    (review_generated.html, review_import.html is deliberately excluded -
+    editable textarea, and all four report/xlsx builders below) - one
+    function, reused everywhere, so the wording only ever needs to be right
+    in one place.
+
+    {{UNIQUE}} (always attached to some generator-invented prefix, e.g.
+    "AutoTest_{{UNIQUE}}") is replaced with a single clean, human-looking
+    sample value (a short name-like word + a fixed number) instead of a
+    clause describing the generation mechanism - a business reader doesn't
+    need to know the value is auto-generated, just what a plausible value
+    looks like. Successive {{UNIQUE}} tokens in the same steps text cycle
+    through a small fixed word list so a multi-field scenario (first/middle/
+    last name) doesn't show the same word three times.
+
+    {{FIXTURE:<type>.<attr>}} is replaced with a phrase describing which
+    earlier record's data is being reused. When two or more FIXTURE tokens
+    appear back-to-back (only whitespace between them, e.g. first_name and
+    last_name of the same record), only the first gets the full "of the
+    existing <type> used earlier in this batch" phrase - later adjacent
+    ones are joined with "and" and just name the attribute, avoiding the
+    run-on "...used earlier in this batch the last name of the existing
+    ...used earlier in this batch" that a naive per-token substitution
+    produces.
 
     Returns plain, unescaped text in all cases - callers are responsible for
     escaping/formatting downstream (nl2br()/esc() for the HTML report
@@ -136,8 +159,16 @@ def humanize_steps(steps_text):
     if not steps_text:
         return steps_text
 
+    _word_counter = [0]
+
     def _unique_repl(m):
-        return "a unique auto-generated value (e.g. \"" + m.group(0).replace("{{UNIQUE}}", "482913") + "\")"
+        word = _SAMPLE_TOKEN_WORDS[_word_counter[0] % len(_SAMPLE_TOKEN_WORDS)]
+        _word_counter[0] += 1
+        return f"{word}214"
+
+    text = _UNIQUE_TOKEN_RE.sub(_unique_repl, steps_text)
+
+    _last_fixture_end = [None]
 
     def _fixture_repl(m):
         type_attr = m.group(1)
@@ -146,11 +177,19 @@ def humanize_steps(steps_text):
         else:
             type_name, attr_name = type_attr, ""
         attr_label = attr_name.replace("_", " ")
+
+        # Adjacent to the previous FIXTURE match (only whitespace between)?
+        # Give it the short, joined form instead of repeating the full phrase.
+        gap = text[_last_fixture_end[0]:m.start()] if _last_fixture_end[0] is not None else None
+        adjacent = gap is not None and gap.strip() == ""
+        _last_fixture_end[0] = m.end()
+
+        if adjacent and attr_label:
+            return f"and {attr_label}"
         if attr_label:
             return f"the {attr_label} of the existing {type_name} used earlier in this batch"
         return f"the existing {type_name} used earlier in this batch"
 
-    text = _UNIQUE_TOKEN_RE.sub(_unique_repl, steps_text)
     text = _FIXTURE_TOKEN_RE.sub(_fixture_repl, text)
     return text
 
