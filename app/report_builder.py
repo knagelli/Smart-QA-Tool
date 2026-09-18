@@ -58,6 +58,7 @@ by design (flagged, not scenario'd) but still appear in the Validation
 sheet/section and in the traceability matrix as NOT_TESTABLE.
 """
 import json
+import re
 import sys
 import html
 from collections import defaultdict
@@ -103,6 +104,57 @@ def nl2br(s):
     return esc(s).replace("\\n", "<br>").replace("\n", "<br>")
 
 
+# Regexes for the two literal placeholder tokens qa_engine.py's generation
+# prompt instructs the model to embed in a scenario's steps text (see
+# PROMPT_TEMPLATE/CUSTOM_PROMPT_TEMPLATE there): "AutoTest_{{UNIQUE}}" (or
+# similar - any text immediately followed by the {{UNIQUE}} token) and
+# "{{FIXTURE:<type>.<attr>}}". Both are resolved into real values only at
+# live-execution time, by execute_engine.py, which pattern-matches on these
+# EXACT strings - this function must never be applied to the stored
+# data.json steps string itself, only to a copy used for human display.
+_UNIQUE_TOKEN_RE = re.compile(r"[\w-]*\{\{UNIQUE\}\}")
+_FIXTURE_TOKEN_RE = re.compile(r"\{\{FIXTURE:([\w.]+)\}\}")
+
+
+def humanize_steps(steps_text):
+    """Display-only rewrite of a test scenario's steps text: replaces the
+    raw {{UNIQUE}}/{{FIXTURE:...}} placeholder tokens (meaningful to
+    execute_engine.py, meaningless-looking to a human reviewer - see
+    claude/council-brainstorm-human-readable-placeholder-tokens-2026-09-19.md)
+    with a plain-language phrase describing what will happen, without
+    changing anything else in the text. Called at every point steps text is
+    rendered for a human to read (review_generated.html, review_import.html,
+    and all four report/xlsx builders below) - one function, reused
+    everywhere, so the wording only ever needs to be right in one place.
+
+    Returns plain, unescaped text in all cases - callers are responsible for
+    escaping/formatting downstream (nl2br()/esc() for the HTML report
+    builders, Jinja's own autoescaping for the two templates), exactly as
+    they already do for any other field. Never mutates or returns anything
+    that gets written back to data.json - execute_engine.py must keep
+    seeing the original, unmodified tokens."""
+    if not steps_text:
+        return steps_text
+
+    def _unique_repl(m):
+        return "a unique auto-generated value (e.g. \"" + m.group(0).replace("{{UNIQUE}}", "482913") + "\")"
+
+    def _fixture_repl(m):
+        type_attr = m.group(1)
+        if "." in type_attr:
+            type_name, attr_name = type_attr.split(".", 1)
+        else:
+            type_name, attr_name = type_attr, ""
+        attr_label = attr_name.replace("_", " ")
+        if attr_label:
+            return f"the {attr_label} of the existing {type_name} used earlier in this batch"
+        return f"the existing {type_name} used earlier in this batch"
+
+    text = _UNIQUE_TOKEN_RE.sub(_unique_repl, steps_text)
+    text = _FIXTURE_TOKEN_RE.sub(_fixture_repl, text)
+    return text
+
+
 # --------------------------------------------------------------------------- HTML
 def build_html(data):
     validation = data.get("validation", [])
@@ -137,7 +189,7 @@ def build_html(data):
             f'<td>{esc(s.get("req_id",""))}</td>'
             f'<td>{esc(s.get("title",""))}</td>'
             f'<td>{esc(s.get("precondition",""))}</td>'
-            f'<td>{nl2br(s.get("steps",""))}</td>'
+            f'<td>{nl2br(humanize_steps(s.get("steps","")))}</td>'
             f'<td>{esc(s.get("expected_result",""))}</td></tr>'
         )
     tc_html = "\n".join(tc_rows) if tc_rows else '<tr><td colspan="6" class="empty">No test scenarios generated.</td></tr>'
@@ -339,7 +391,7 @@ def build_xlsx(data, out_path):
     for s in data.get("test_scenarios", []):
         ws2.append(xl_row([
             s.get("tc_id", ""), s.get("req_id", ""), s.get("title", ""),
-            s.get("precondition", ""), s.get("steps", "").replace("\\n", "\n"),
+            s.get("precondition", ""), humanize_steps(s.get("steps", "")).replace("\\n", "\n"),
             s.get("expected_result", ""),
         ]))
         r = ws2.max_row
@@ -435,7 +487,7 @@ def build_html_custom(data, flow):
             f'<td class="tc-ids">{esc(", ".join(s.get("flow_step_ids", [])) or "-")}</td>'
             f'<td>{esc(s.get("title",""))}</td>'
             f'<td>{esc(s.get("precondition",""))}</td>'
-            f'<td>{nl2br(s.get("steps",""))}</td><td>{esc(s.get("expected_result",""))}</td></tr>'
+            f'<td>{nl2br(humanize_steps(s.get("steps","")))}</td><td>{esc(s.get("expected_result",""))}</td></tr>'
         )
     tc_html = "\n".join(tc_rows) if tc_rows else '<tr><td colspan="7" class="empty">No test scenarios generated.</td></tr>'
 
@@ -628,7 +680,7 @@ def build_xlsx_custom(data, flow, out_path):
         ws2.append(xl_row([
             s.get("tc_id", ""), s.get("req_id", ""), ", ".join(s.get("flow_step_ids", [])),
             s.get("title", ""), s.get("precondition", ""),
-            s.get("steps", "").replace("\\n", "\n"), s.get("expected_result", ""),
+            humanize_steps(s.get("steps", "")).replace("\\n", "\n"), s.get("expected_result", ""),
         ]))
         r = ws2.max_row
         for c in range(1, 8):

@@ -59,7 +59,7 @@ from fastapi.templating import Jinja2Templates
 
 from .extract import extract_text
 from .qa_engine import run_qa_analysis, run_qa_analysis_custom, structure_existing_test_cases, match_requirements_to_test_cases
-from .report_builder import build_html, build_xlsx, build_html_custom, build_xlsx_custom
+from .report_builder import build_html, build_xlsx, build_html_custom, build_xlsx_custom, humanize_steps
 from .diagram_parser import parse_flow_diagrams
 from .execute_engine import execute_test_case, ExecutionError
 from .execution_report import build_execution_report
@@ -134,6 +134,11 @@ app = FastAPI(
     openapi_url=None,
 )
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+# Lets any template render a test scenario's steps as {{ tc.steps | humanize_steps }}
+# instead of the raw {{UNIQUE}}/{{FIXTURE:...}} tokens meaningful only to
+# execute_engine.py - see report_builder.humanize_steps for the one shared
+# implementation reused by both templates and every report/xlsx builder.
+templates.env.filters["humanize_steps"] = humanize_steps
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 # Troubleshooting-log dashboard - password-gated, never linked from any
 # client-facing page. See app/run_logger.py and app/admin_routes.py.
