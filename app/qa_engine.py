@@ -7,8 +7,13 @@ and parses the response into the JSON shape report_builder.py expects.
 import json
 import os
 import re
-from anthropic import Anthropic
 
+from . import ai_client
+
+# MODEL is kept only for any external reference; call sites now use
+# ai_client.get_model_id() so the model ID stays correct whether this is
+# running against direct Anthropic or the Bedrock AU profile (see
+# ai_client.py for why this indirection exists).
 MODEL = os.environ.get("QA_MODEL", "claude-sonnet-4-6")
 
 SYSTEM_PROMPT = (
@@ -165,7 +170,7 @@ def _build_process_context_block(process_context: dict) -> str:
 
 def run_qa_analysis(application: str, requirements_text: str, api_key: str, max_test_cases: int | None = None,
                      process_context: dict | None = None) -> dict:
-    client = Anthropic(api_key=api_key)
+    client = ai_client.get_client(api_key)
 
     prompt = PROMPT_TEMPLATE.format(
         application=application.strip(),
@@ -190,7 +195,7 @@ def run_qa_analysis(application: str, requirements_text: str, api_key: str, max_
         )
 
     resp = client.messages.create(
-        model=MODEL,
+        model=ai_client.get_model_id(),
         max_tokens=8000,
         temperature=0,
         system=SYSTEM_PROMPT,
@@ -327,7 +332,7 @@ def run_qa_analysis_custom(application: str, brief_text: str, flow: dict, requir
     """Option B generation pass. `flow` is the human-confirmed dict produced by
     diagram_parser.parse_flow_diagrams and then edited/approved on the
     review-and-confirm screen - never the raw, unconfirmed parse."""
-    client = Anthropic(api_key=api_key)
+    client = ai_client.get_client(api_key)
 
     # Context budget: three documents (brief + flow + requirements) can
     # exceed the single-document cap Option A uses, so each gets its own
@@ -349,7 +354,7 @@ def run_qa_analysis_custom(application: str, brief_text: str, flow: dict, requir
     )
 
     resp = client.messages.create(
-        model=MODEL,
+        model=ai_client.get_model_id(),
         max_tokens=8000,
         temperature=0,
         system=CUSTOM_SYSTEM_PROMPT,
@@ -424,7 +429,7 @@ def structure_existing_test_cases(application: str, raw_text: str, api_key: str)
     recognizable column headers, and always for prose formats (.docx/.txt/
     .pdf) - see main.py's import-tests route for the deterministic tabular
     path this sits behind."""
-    client = Anthropic(api_key=api_key)
+    client = ai_client.get_client(api_key)
 
     prompt = IMPORT_PROMPT_TEMPLATE.format(
         application=application.strip(),
@@ -432,7 +437,7 @@ def structure_existing_test_cases(application: str, raw_text: str, api_key: str)
     )
 
     resp = client.messages.create(
-        model=MODEL,
+        model=ai_client.get_model_id(),
         max_tokens=8000,
         temperature=0,
         system=IMPORT_SYSTEM_PROMPT,
@@ -481,7 +486,7 @@ def match_requirements_to_test_cases(application: str, requirements_text: str, t
     a genuinely heuristic best-effort pass, not an authoritative result, and
     must always be presented to the client with that caveat (see
     review_import.html)."""
-    client = Anthropic(api_key=api_key)
+    client = ai_client.get_client(api_key)
 
     tc_summary = [
         {"tc_id": tc.get("tc_id", ""), "title": tc.get("title", ""), "steps": tc.get("steps", "")[:500]}
@@ -494,7 +499,7 @@ def match_requirements_to_test_cases(application: str, requirements_text: str, t
     )
 
     resp = client.messages.create(
-        model=MODEL,
+        model=ai_client.get_model_id(),
         max_tokens=8000,
         temperature=0,
         system=TRACEABILITY_SYSTEM_PROMPT,

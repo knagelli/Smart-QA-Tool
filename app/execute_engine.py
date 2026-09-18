@@ -38,9 +38,9 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from anthropic import Anthropic
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
+from . import ai_client
 from .run_logger import hash_bytes
 
 logger = logging.getLogger("req2qa.execute")
@@ -433,7 +433,7 @@ def execute_test_case(
     raises is swallowed so a status-tracking bug can never break a live run.
     """
     shots_dir.mkdir(parents=True, exist_ok=True)
-    client = Anthropic(api_key=api_key)
+    client = ai_client.get_client(api_key)
     step_log = []
     screenshots = []
     created_entity = None
@@ -466,7 +466,7 @@ def execute_test_case(
 
             for step_num in range(MAX_AGENT_STEPS):
                 response = client.messages.create(
-                    model=MODEL,
+                    model=ai_client.get_model_id(),
                     max_tokens=1024,
                     # cache_control on the system block: the per-application
                     # system prompt is identical across every step of a test
