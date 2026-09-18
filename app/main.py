@@ -1052,6 +1052,13 @@ async def analyze(
         run_dir = RUNS_DIR / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
         data["status"] = "awaiting_curation"
+        # Stored so /confirm-generated/{run_id} can re-validate the same
+        # access code without asking the client to re-type it seconds after
+        # they already entered it here - never re-emitted into the
+        # review_generated.html page itself (that page is explicitly meant
+        # to be shareable with a business SME for sign-off, so the access
+        # code must never appear in its HTML).
+        data["access_code"] = access_code
         (run_dir / "data.json").write_text(json.dumps(data))
         rl.finish("ok", {"test_case_count": total_tcs, "flagged_requirements": flagged, "status": "awaiting_curation"})
 
@@ -1117,12 +1124,18 @@ async def analyze(
 
 
 @app.post("/confirm-generated/{run_id}", response_class=HTMLResponse)
-async def confirm_generated(request: Request, run_id: str, access_code: str = Form(...)):
+async def confirm_generated(request: Request, run_id: str):
     """Finalizes a paid-client generation run after the keep/curation review
     step (see /analyze above and claude/billing-model-unbundled-generation-
     execution-2026-09-15.md). Only test cases the client kept are billed
     (consumed against their quota) and written into the final report/
-    data.json - the discarded ones are never counted or persisted onward."""
+    data.json - the discarded ones are never counted or persisted onward.
+
+    access_code is read from data.json (stored at generation time, see
+    /analyze), not re-collected here - the client already provided it once,
+    seconds earlier, to generate this exact run. It is never re-emitted into
+    review_generated.html's page HTML, since that page is explicitly meant
+    to be shareable with a business SME for sign-off (2026-09-19 finding)."""
     if not run_id.isalnum():
         raise HTTPException(status_code=400)
     data_path = RUNS_DIR / run_id / "data.json"
@@ -1137,6 +1150,16 @@ async def confirm_generated(request: Request, run_id: str, access_code: str = Fo
 
     if data.get("status") != "awaiting_curation":
         raise HTTPException(status_code=409, detail="This run has already been confirmed or is not awaiting review.")
+
+    access_code = data.get("access_code")
+    if not access_code:
+        # Backward-compat: a run generated before this change shipped has no
+        # stored access_code. Rather than crash on a missing form field (the
+        # page no longer submits one), fail clearly and recoverably.
+        raise HTTPException(
+            status_code=409,
+            detail="This run was generated before an update to this page and can't be confirmed here - please regenerate your test cases.",
+        )
 
     def err(msg, code=400):
         return templates.TemplateResponse(request, "review_generated.html",
