@@ -5,7 +5,16 @@
    page, so it stays crisp and legible rather than purely decorative. */
 :root{--navy:#2B3A2A;--blue:#5B7A52;--sky:#E9EFE3;--border:#E6DFCF;--text:#2B2B25;
   --muted:#5B5646;--bg:#FBF7ED;--red:#A13D2B;--rbg:#F6E3DA;
-  --purple:#B5652E;--pbg:#F3E4D3;--cream-card:#FFFFFF}
+  --purple:#B5652E;--pbg:#F3E4D3;--cream-card:#FFFFFF;
+  --green:#3F6B3F;--gbg:#E3EEDD;--amber:#9C6B1F;--abg:#F3E9D3}
+/* --green/--gbg and --amber/--abg added 2026-09-21: the only two semantic
+   colors (pass/blocked status) the original olive/cream palette never
+   defined, so every PASS/FAIL/BLOCKED-style badge across the app (live
+   status pills, execution reports, xlsx exports) had been drifting to a
+   hardcoded pre-rebrand blue palette instead of sharing one definition
+   here. This is now the single canonical status-color source for the
+   whole product - report_theme.py mirrors these exact values for the
+   Python-built HTML/XLSX reports rather than defining its own. */
 /* --muted darkened from the original #7A7462 - the lighter value fell
    short of WCAG AA contrast (4.5:1) against --bg at the small sizes it's
    used at (11.5-13px hint/footnote text). See council-review-site-and-
