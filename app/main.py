@@ -53,9 +53,10 @@ from typing import List
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, Request, UploadFile, File, Form, HTTPException, BackgroundTasks
-from fastapi.responses import HTMLResponse, FileResponse, PlainTextResponse, StreamingResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, FileResponse, PlainTextResponse, StreamingResponse, RedirectResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .extract import extract_text
 from .qa_engine import run_qa_analysis, run_qa_analysis_custom, structure_existing_test_cases, match_requirements_to_test_cases
@@ -143,6 +144,44 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 # Troubleshooting-log dashboard - password-gated, never linked from any
 # client-facing page. See app/run_logger.py and app/admin_routes.py.
 app.include_router(admin_routes.router)
+
+# Every raise HTTPException(...) in this file (expired link, not found,
+# rate-limited, etc.) previously fell through to FastAPI's bare default -
+# a raw {"detail": "..."} JSON body, unstyled, with no way back into the
+# app. That's exactly what a client sees the moment they click an old
+# bookmarked or forwarded link, which becomes common the more this
+# product is shared/marketed. Fixed 2026-09-21: render the same branded
+# chrome (topbar/footer/fonts/palette) as every other page for a normal
+# browser navigation, while leaving JSON untouched for anything that
+# actually wants it (execute_status.js's polling endpoints send
+# Accept: application/json, not text/html, so they're unaffected).
+_ERROR_TITLES = {
+    400: "Something's not right with that request",
+    401: "Access code required",
+    403: "Access denied",
+    404: "Page not found",
+    409: "Already handled",
+    429: "Too many requests",
+    500: "Something went wrong",
+    502: "Something went wrong",
+    503: "Temporarily unavailable",
+}
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _branded_http_exception_handler(request: Request, exc: StarletteHTTPException):
+    wants_html = "text/html" in request.headers.get("accept", "")
+    if not wants_html:
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    title = _ERROR_TITLES.get(exc.status_code, "Something went wrong")
+    detail = exc.detail if isinstance(exc.detail, str) and exc.detail else (
+        "Please try again, or head back to the homepage."
+    )
+    return templates.TemplateResponse(
+        "error.html",
+        {"request": request, "status_code": exc.status_code, "title": title, "detail": detail},
+        status_code=exc.status_code,
+    )
 
 
 # --------------------------------------------------------------------------

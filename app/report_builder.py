@@ -66,6 +66,21 @@ from collections import defaultdict
 from pathlib import Path
 
 try:
+    # Normal case: imported as part of the app package (main.py does this).
+    from .report_theme import (
+        PALETTE_CSS, FONT_LINKS, BODY_FONT_CSS, HEADING_FONT_CSS, CHROME_CSS,
+        report_topbar_html, report_footer_html,
+    )
+except ImportError:
+    # This file is also documented as a standalone CLI script (see the
+    # module docstring's USAGE section) - a relative import breaks that
+    # invocation, so fall back to a plain import for that case.
+    from report_theme import (
+        PALETTE_CSS, FONT_LINKS, BODY_FONT_CSS, HEADING_FONT_CSS, CHROME_CSS,
+        report_topbar_html, report_footer_html,
+    )
+
+try:
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment
     from openpyxl.utils import get_column_letter
@@ -378,33 +393,34 @@ it's meant to support your own QA review, not replace it.
 
     return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Test Scenarios &amp; Traceability Report</title><style>
+<title>Test Scenarios &amp; Traceability Report</title>
+{FONT_LINKS}
+<style>
 *,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
-:root{{--navy:#0F2044;--blue:#1A5EA8;--sky:#E8F1FB;--green:#15803D;--gbg:#DCFCE7;
---red:#B91C1C;--rbg:#FEE2E2;--amber:#B45309;--abg:#FEF3C7;--purple:#6D28D9;
---pbg:#EDE9FE;--border:#E2E8F0;--text:#1E293B;--muted:#64748B;--bg:#F8FAFC}}
-body{{font-family:system-ui,sans-serif;background:var(--bg);color:var(--text);font-size:14px;line-height:1.6}}
+{PALETTE_CSS}
+body{{{BODY_FONT_CSS}background:var(--bg);color:var(--text);font-size:14px;line-height:1.6}}
+{CHROME_CSS}
 .wrap{{max-width:1300px;margin:0 auto;padding:32px 24px 64px}}
 .hdr{{background:var(--navy);color:#fff;border-radius:12px;padding:36px 40px;margin-bottom:28px}}
-.hdr h1{{font-size:24px;font-weight:700}}
-.hdr .sub{{color:#94A3B8;font-size:13px;margin-top:6px}}
+.hdr h1{{{HEADING_FONT_CSS}font-size:24px;font-weight:700}}
+.hdr .sub{{color:#C7CEBB;font-size:13px;margin-top:6px}}
 .hdr .meta{{display:flex;gap:32px;margin-top:20px;flex-wrap:wrap}}
-.mi{{font-size:12px;color:#CBD5E1}}.mi strong{{display:block;color:#fff;font-size:13px;margin-bottom:2px}}
+.mi{{font-size:12px;color:#C7CEBB}}.mi strong{{display:block;color:#fff;font-size:13px;margin-bottom:2px}}
 .sc{{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:32px}}
-.card{{background:#fff;border:1px solid var(--border);border-radius:10px;padding:20px 14px;text-align:center}}
+.card{{background:var(--cream-card);border:1px solid var(--border);border-radius:10px;padding:20px 14px;text-align:center}}
 .card .n{{font-size:34px;font-weight:700;line-height:1.1}}.card .l{{font-size:12px;color:var(--muted);margin-top:4px}}
 .card.good .n{{color:var(--green)}}.card.bad .n{{color:var(--red)}}
 .card.warn .n{{color:var(--amber)}}.card.info .n{{color:var(--blue)}}
-.st{{font-size:16px;font-weight:700;color:var(--navy);margin:36px 0 14px;padding-bottom:10px;
+.st{{{HEADING_FONT_CSS}font-size:16px;font-weight:700;color:var(--navy);margin:36px 0 14px;padding-bottom:10px;
 border-bottom:2px solid var(--border);display:flex;align-items:center;gap:10px}}
-.pill{{font-size:11px;font-weight:600;background:var(--sky);color:var(--blue);padding:2px 10px;border-radius:20px}}
+.pill{{font-family:'Inter',sans-serif;font-size:11px;font-weight:600;background:var(--sky);color:var(--blue);padding:2px 10px;border-radius:20px}}
 .tw{{overflow-x:auto;border-radius:10px;border:1px solid var(--border);margin-bottom:8px}}
-table{{width:100%;border-collapse:collapse;background:#fff;font-size:13px}}
+table{{width:100%;border-collapse:collapse;background:var(--cream-card);font-size:13px}}
 thead th{{background:var(--navy);color:#fff;padding:11px 14px;text-align:left;font-weight:600;font-size:12px;white-space:nowrap}}
 thead th:first-child{{border-radius:9px 0 0 0}}thead th:last-child{{border-radius:0 9px 0 0}}
 tbody tr{{border-bottom:1px solid var(--border)}}tbody tr:last-child{{border-bottom:none}}
-tbody tr:hover{{background:#F1F5F9}}tbody td{{padding:10px 14px;vertical-align:top}}
-.row-valid{{background:#FAFFF9}}.row-flagged{{background:#FFFDF0}}
+tbody tr:hover{{background:var(--sky)}}tbody td{{padding:10px 14px;vertical-align:top}}
+.row-valid{{background:var(--gbg)}}.row-flagged{{background:var(--abg)}}
 .tc-ids{{font-family:monospace;font-size:12px;color:var(--blue)}}
 .empty{{text-align:center;color:var(--muted);padding:24px;font-style:italic}}
 .badge{{display:inline-block;font-size:11px;font-weight:600;padding:2px 9px;border-radius:4px;white-space:nowrap}}
@@ -417,7 +433,9 @@ font-size:12.5px;color:var(--text);margin-bottom:14px;line-height:1.55}}
 .pill.beta{{background:var(--pbg);color:var(--purple)}}
 .card.beta .n{{color:var(--purple)}}
 @media print{{.tw{{overflow:visible}}body{{background:#fff}}}}
-</style></head><body><div class="wrap">
+</style></head><body>
+{report_topbar_html()}
+<div class="wrap">
 <header class="hdr"><h1>Test Scenarios &amp; Requirements Traceability Report</h1>
 <p class="sub">Application-aware requirement validation and scenario generation</p>
 <div class="meta">
@@ -461,11 +479,13 @@ font-size:12.5px;color:var(--text);margin-bottom:14px;line-height:1.55}}
 </tbody></table></div>
 
 <div class="ft">Req2QA &mdash; Requirements to Test Coverage &bull; {esc(data.get("run_date",""))}</div>
-</div></body></html>"""
+</div>
+{report_footer_html()}
+</body></html>"""
 
 
 # --------------------------------------------------------------------------- XLSX
-HEADER_FILL = PatternFill("solid", fgColor="1F4E79")
+HEADER_FILL = PatternFill("solid", fgColor="2B3A2A")  # matches --navy in report_theme.py/style.css (was 1F4E79, an off-brand generic navy)
 HEADER_FONT = Font(bold=True, color="FFFFFF")
 GOOD_FILL = PatternFill("solid", fgColor="DCFCE7")
 WARN_FILL = PatternFill("solid", fgColor="FEF3C7")
@@ -657,33 +677,34 @@ def build_html_custom(data, flow):
 
     return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Custom Application - Test Coverage Report</title><style>
+<title>Custom Application - Test Coverage Report</title>
+{FONT_LINKS}
+<style>
 *,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
-:root{{--navy:#0F2044;--blue:#1A5EA8;--sky:#E8F1FB;--green:#15803D;--gbg:#DCFCE7;
---red:#B91C1C;--rbg:#FEE2E2;--amber:#B45309;--abg:#FEF3C7;--purple:#6D28D9;
---pbg:#EDE9FE;--border:#E2E8F0;--text:#1E293B;--muted:#64748B;--bg:#F8FAFC}}
-body{{font-family:system-ui,sans-serif;background:var(--bg);color:var(--text);font-size:14px;line-height:1.6}}
+{PALETTE_CSS}
+body{{{BODY_FONT_CSS}background:var(--bg);color:var(--text);font-size:14px;line-height:1.6}}
+{CHROME_CSS}
 .wrap{{max-width:1300px;margin:0 auto;padding:32px 24px 64px}}
 .hdr{{background:var(--navy);color:#fff;border-radius:12px;padding:36px 40px;margin-bottom:28px}}
-.hdr h1{{font-size:24px;font-weight:700}}
-.hdr .sub{{color:#94A3B8;font-size:13px;margin-top:6px}}
+.hdr h1{{{HEADING_FONT_CSS}font-size:24px;font-weight:700}}
+.hdr .sub{{color:#C7CEBB;font-size:13px;margin-top:6px}}
 .hdr .meta{{display:flex;gap:32px;margin-top:20px;flex-wrap:wrap}}
-.mi{{font-size:12px;color:#CBD5E1}}.mi strong{{display:block;color:#fff;font-size:13px;margin-bottom:2px}}
+.mi{{font-size:12px;color:#C7CEBB}}.mi strong{{display:block;color:#fff;font-size:13px;margin-bottom:2px}}
 .sc{{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:32px}}
-.card{{background:#fff;border:1px solid var(--border);border-radius:10px;padding:20px 14px;text-align:center}}
+.card{{background:var(--cream-card);border:1px solid var(--border);border-radius:10px;padding:20px 14px;text-align:center}}
 .card .n{{font-size:34px;font-weight:700;line-height:1.1}}.card .l{{font-size:12px;color:var(--muted);margin-top:4px}}
 .card.good .n{{color:var(--green)}}.card.bad .n{{color:var(--red)}}
 .card.warn .n{{color:var(--amber)}}.card.info .n{{color:var(--blue)}}
-.st{{font-size:16px;font-weight:700;color:var(--navy);margin:36px 0 14px;padding-bottom:10px;
+.st{{{HEADING_FONT_CSS}font-size:16px;font-weight:700;color:var(--navy);margin:36px 0 14px;padding-bottom:10px;
 border-bottom:2px solid var(--border);display:flex;align-items:center;gap:10px}}
-.pill{{font-size:11px;font-weight:600;background:var(--sky);color:var(--blue);padding:2px 10px;border-radius:20px}}
+.pill{{font-family:'Inter',sans-serif;font-size:11px;font-weight:600;background:var(--sky);color:var(--blue);padding:2px 10px;border-radius:20px}}
 .tw{{overflow-x:auto;border-radius:10px;border:1px solid var(--border);margin-bottom:8px}}
-table{{width:100%;border-collapse:collapse;background:#fff;font-size:13px}}
+table{{width:100%;border-collapse:collapse;background:var(--cream-card);font-size:13px}}
 thead th{{background:var(--navy);color:#fff;padding:11px 14px;text-align:left;font-weight:600;font-size:12px;white-space:nowrap}}
 thead th:first-child{{border-radius:9px 0 0 0}}thead th:last-child{{border-radius:0 9px 0 0}}
 tbody tr{{border-bottom:1px solid var(--border)}}tbody tr:last-child{{border-bottom:none}}
-tbody tr:hover{{background:#F1F5F9}}tbody td{{padding:10px 14px;vertical-align:top}}
-.row-valid{{background:#FAFFF9}}.row-flagged{{background:#FFFDF0}}
+tbody tr:hover{{background:var(--sky)}}tbody td{{padding:10px 14px;vertical-align:top}}
+.row-valid{{background:var(--gbg)}}.row-flagged{{background:var(--abg)}}
 .tc-ids{{font-family:monospace;font-size:12px;color:var(--blue)}}
 .empty{{text-align:center;color:var(--muted);padding:24px;font-style:italic}}
 .badge{{display:inline-block;font-size:11px;font-weight:600;padding:2px 9px;border-radius:4px;white-space:nowrap}}
@@ -696,7 +717,9 @@ font-size:12.5px;color:var(--text);margin-bottom:14px;line-height:1.55}}
 .pill.beta{{background:var(--pbg);color:var(--purple)}}
 .card.beta .n{{color:var(--purple)}}
 @media print{{.tw{{overflow:visible}}body{{background:#fff}}}}
-</style></head><body><div class="wrap">
+</style></head><body>
+{report_topbar_html()}
+<div class="wrap">
 <header class="hdr"><h1>Custom Application &mdash; Test Coverage Report</h1>
 <p class="sub">Consistency/testability check &amp; three-way traceability (requirement &harr; process step &harr; test case)</p>
 <div class="meta">
@@ -749,7 +772,9 @@ font-size:12.5px;color:var(--text);margin-bottom:14px;line-height:1.55}}
 </tbody></table></div>
 
 <div class="ft">Req2QA &mdash; Custom Application Mode &bull; {esc(data.get("run_date",""))}</div>
-</div></body></html>"""
+</div>
+{report_footer_html()}
+</body></html>"""
 
 
 def build_xlsx_custom(data, flow, out_path):
