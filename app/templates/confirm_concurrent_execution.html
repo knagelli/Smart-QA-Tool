@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<title>Req2QA — Confirm Live Execution</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+{% include "_topbar.html" %}
+<div class="wrap wrap-wide">
+  <header class="hdr">
+    <h1>You already have a job running</h1>
+    <p class="sub">{{ application }}</p>
+  </header>
+
+  <div class="alert alert-warn">
+    Another live-execution batch for this access code is still in progress
+    ({{ active_total }} test case{{ 's' if active_total != 1 else '' }}{% if active_status_url %} &mdash; <a href="{{ active_status_url }}">view its progress</a>{% endif %}).
+    Starting a second batch now means both will run at the same time against
+    your test allowance.
+  </div>
+
+  <div class="alert alert-info">
+    {% if remaining is not none %}
+    This engagement has <strong>{{ remaining }}</strong> test case{{ 's' if remaining != 1 else '' }} left in its execution allowance
+    (before this new request). You're about to submit <strong>{{ requested_count }}</strong> more.
+    {% if requested_count > remaining %}
+    <br><strong>This request would exceed your remaining allowance</strong> once the job already running finishes &mdash; it may be blocked at that point.
+    {% endif %}
+    {% else %}
+    This access code has no execution limit configured. You're about to submit <strong>{{ requested_count }}</strong> more test case{{ 's' if requested_count != 1 else '' }}.
+    {% endif %}
+  </div>
+
+  <form class="card form" action="/execute/{{ run_id }}" method="post">
+    <input type="hidden" name="confirm_concurrent" value="1">
+    {% for key, value in hidden_fields.items() %}
+    <input type="hidden" name="{{ key }}" value="{{ value }}">
+    {% endfor %}
+    {% for tc_id in selected_ids %}
+    <input type="hidden" name="select_{{ tc_id }}" value="on">
+    {% endfor %}
+    <button type="submit" style="margin-top:8px">Yes, run this batch anyway</button>
+  </form>
+  <p class="footnote"><a href="/execute/{{ run_id }}">&larr; No, go back and adjust my selection</a></p>
+</div>
+{% include "_footer.html" %}
+</body>
+</html>

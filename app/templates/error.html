@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<title>Req2QA — {{ status_code }}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+<style>
+.err-wrap{max-width:520px;margin:0 auto;padding:80px 20px;text-align:center}
+.err-code{font-family:'Fraunces',Georgia,serif;font-size:15px;font-weight:600;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--blue)}
+.err-title{font-family:'Fraunces',Georgia,serif;font-size:26px;font-weight:700;color:var(--navy);margin-top:10px}
+.err-detail{color:var(--muted);font-size:14.5px;margin-top:14px;line-height:1.6}
+.err-actions{margin-top:28px;display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+</style>
+</head>
+<body>
+{% include "_topbar.html" %}
+<div class="err-wrap">
+  <div class="err-code">Error {{ status_code }}</div>
+  <h1 class="err-title">{{ title }}</h1>
+  <p class="err-detail">{{ detail }}</p>
+  <div class="err-actions">
+    <a class="btn" href="/">Back to Req2QA</a>
+    {% if status_code == 404 %}<a class="btn secondary" href="/history">View run history</a>{% endif %}
+  </div>
+</div>
+{% include "_footer.html" %}
+</body>
+</html>
