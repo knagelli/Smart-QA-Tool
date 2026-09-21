@@ -1,0 +1,14 @@
+<div class="topbar">
+  <div class="topbar-inner">
+    <a class="topbar-brand" href="/admin/quotas" aria-label="Req2QA Admin"><img class="topbar-logo-img" src="/static/logo.svg" alt="Req2QA" height="24"><span class="admin-brand-tag">Admin</span></a>
+    <button type="button" class="topbar-toggle" aria-label="Open menu" aria-expanded="false" aria-controls="topbar-nav">&#9776;</button>
+    <nav class="topbar-nav" id="topbar-nav">
+      <a href="/admin/quotas"{% if active_admin_nav == 'quotas' %} class="nav-emphasis"{% endif %}>Client Quotas</a>
+      <a href="/admin/logs"{% if active_admin_nav == 'logs' %} class="nav-emphasis"{% endif %}>Logs</a>
+      <a href="/admin/trials"{% if active_admin_nav == 'trials' %} class="nav-emphasis"{% endif %}>Trial Signups</a>
+      <a href="/admin/test-email"{% if active_admin_nav == 'test-email' %} class="nav-emphasis"{% endif %}>Test Email</a>
+    </nav>
+    <a class="btn secondary topbar-cta" href="/admin/logout">Log out</a>
+  </div>
+</div>
+<script src="/static/topbar.js" defer></script>

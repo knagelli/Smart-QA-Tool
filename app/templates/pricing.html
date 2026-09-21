@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<title>Req2QA — Pricing</title>
+<meta name="description" content="Req2QA's pricing, in the open: how the base + per-test-case structure works across generation, execution, and requirement impact analysis.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+{% if canonical_url %}<link rel="canonical" href="{{ canonical_url }}">{% endif %}
+<style>
+  .pricing-table{width:100%;border-collapse:collapse;margin-top:14px;font-size:13.5px}
+  .pricing-table th,.pricing-table td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--border)}
+  .pricing-table th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.03em}
+  .pricing-table td.num,.pricing-table th.num{text-align:right;white-space:nowrap}
+  .tier-base{font-family:'Fraunces',Georgia,serif;font-weight:700;color:var(--navy);font-size:22px}
+  .tier-card{margin-bottom:24px}
+  .tier-card h3{margin:0 0 4px 0;color:var(--navy)}
+  .tier-card .tier-sub{color:var(--muted);font-size:13px;margin-bottom:2px}
+</style>
+</head>
+<body>
+{% include "_topbar.html" %}
+<div class="wrap">
+  <header class="hdr">
+    <h1>Pricing, in the open</h1>
+    <p class="sub">We're confident in what Req2QA does, so here's exactly how it's priced &mdash; base allowance, per-case rates, and where each engagement's actual invoice comes from. No login wall, no "contact us for a number."</p>
+  </header>
+
+  <div class="alert alert-info" style="font-size:13px">
+    <strong>How to read this page:</strong> every tier's price below is a <em>base</em> (covering up to 25 test cases) plus a declining per-case rate once you go beyond that. Your actual invoice is driven entirely by how many test cases you generate and/or execute &mdash; these numbers are the real rate card, not an illustrative range, but they are not a quote for your specific engagement. <a href="mailto:kalyan@req2qa.com?subject=Pricing%20question%20-%20Req2QA">Tell us your scope</a> and we'll work out the exact number together.
+  </div>
+
+  <div class="tier-card card">
+    <p class="tier-sub">Tier 1 &mdash; Generation only</p>
+    <h3>Requirements in, test cases out</h3>
+    <div class="tier-base">$249 AUD base</div>
+    <p class="hint" style="margin:6px 0 0">Covers up to 25 generated, kept test cases. No live execution against your environment in this tier.</p>
+    <table class="pricing-table">
+      <thead><tr><th>Test cases kept</th><th class="num">Rate</th></tr></thead>
+      <tbody>
+        <tr><td>Up to 25</td><td class="num">$249 base</td></tr>
+        <tr><td>26&ndash;75</td><td class="num">+$7/case</td></tr>
+        <tr><td>76&ndash;150</td><td class="num">+$5/case</td></tr>
+        <tr><td>151&ndash;300</td><td class="num">+$4/case</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="tier-card card">
+    <p class="tier-sub">Tier 2 &mdash; Generation + execution</p>
+    <h3>End to end: generated, then run for you</h3>
+    <div class="tier-base">$399 AUD base</div>
+    <p class="hint" style="margin:6px 0 0">Covers up to 25 test cases, generated from your requirements and executed live against your sandbox/UAT environment.</p>
+    <table class="pricing-table">
+      <thead><tr><th>Test cases</th><th class="num">Rate</th></tr></thead>
+      <tbody>
+        <tr><td>Up to 25</td><td class="num">$399 base</td></tr>
+        <tr><td>26&ndash;75</td><td class="num">+$9/case</td></tr>
+        <tr><td>76&ndash;150</td><td class="num">+$6/case</td></tr>
+        <tr><td>151&ndash;300</td><td class="num">+$5/case</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="tier-card card">
+    <p class="tier-sub">Tier 3 &mdash; Execution only</p>
+    <h3>You already have test cases &mdash; we run them</h3>
+    <div class="tier-base">$349 AUD base</div>
+    <p class="hint" style="margin:6px 0 0">For test cases you supply yourself (spreadsheet, existing suite, or your own Req2QA history &mdash; see below). One flat rate regardless of app complexity.</p>
+    <table class="pricing-table">
+      <thead><tr><th>Test cases executed</th><th class="num">Rate</th></tr></thead>
+      <tbody>
+        <tr><td>Up to 25</td><td class="num">$349 base</td></tr>
+        <tr><td>26&ndash;75</td><td class="num">+$9/case</td></tr>
+        <tr><td>76&ndash;150</td><td class="num">+$6/case</td></tr>
+        <tr><td>151&ndash;300</td><td class="num">+$5/case</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="tier-card card">
+    <p class="tier-sub">Add-on &mdash; available on paid Tier 1/2 engagements</p>
+    <h3>Requirement Impact Analysis</h3>
+    <p style="margin:2px 0 10px">See what changed between two versions of your requirements, and which of your existing test cases may need a second look.</p>
+    <table class="pricing-table">
+      <tbody>
+        <tr><td>Included with your requirement history</td><td class="num">2 comparisons / 90 days</td></tr>
+        <tr><td>Additional comparisons</td><td class="num">$29 AUD each</td></tr>
+      </tbody>
+    </table>
+    <div class="alert alert-info" style="margin-top:14px;font-size:12.5px">
+      Not available on free trial runs. This fee covers the comparison itself &mdash; if you then choose to generate or regenerate test cases from what it finds, that's billed as ordinary generation under Tier 1 or Tier 2 above, not folded into this add-on.
+    </div>
+  </div>
+
+  <div class="tier-card card">
+    <p class="tier-sub">Returning for execution on cases you already paid to generate</p>
+    <h3>No double-billing, ever</h3>
+    <p style="margin:2px 0 10px">If you generated test cases under Tier 1 this month and come back for execution under Tier 3 next month, you're not charged again for writing them &mdash; the Tier 3 fee covers running them against your environment and reporting results, nothing else. On paid engagements, we keep up to 5 of your recent kept test-case sets for up to 90 days so you can select from them directly for execution &mdash; see <a href="/test-case-history">Saved Test Cases</a>.</p>
+  </div>
+
+  <div class="alert" style="margin-top:8px;font-size:12.5px">
+    <strong>Disclaimer:</strong> the rates above are Req2QA's standard published rate card as of {{ updated_date or "2026-09-21" }} and may be revised over time; any change applies going forward, never retroactively to a run already completed. They describe how a price is built, not a binding quote &mdash; a specific engagement may also involve scope we haven't priced here yet (for example, a custom-application process-flow review). All prices are in AUD and exclude any applicable taxes.
+  </div>
+
+  <p class="footnote"><a href="/">&larr; Back to Req2QA</a></p>
+</div>
+{% include "_footer.html" %}
+</body>
+</html>

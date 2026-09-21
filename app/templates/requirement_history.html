@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<title>Req2QA — Requirement Impact Analysis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+{% include "_topbar.html" %}
+<div class="wrap wrap-wide">
+  <div class="narrow-inner">
+  <header class="hdr">
+    <h1>Requirement Impact Analysis</h1>
+    <p class="sub">See what changed between two versions of your requirements, and which existing test cases may need a second look.</p>
+  </header>
+
+  <div class="alert alert-info" style="font-size:12.5px">
+    We retain up to 5 of your most recent requirement versions (text only &mdash; no screenshots or execution evidence) for up to 90 days from your first upload in that set. After 90 days, or once a 6th version is uploaded, the oldest version(s) are removed automatically. This is separate from, and does not extend, the 7-day retention on execution screenshots and reports.
+  </div>
+
+  {% if error %}
+  <div class="alert">{{ error }}</div>
+  {% endif %}
+
+  <form class="card form" action="/requirement-history" method="post">
+    <label>Access code
+      <input type="password" name="access_code" required placeholder="Provided by your account manager" value="">
+    </label>
+    <button type="submit">Look Up My Requirement Versions</button>
+  </form>
+
+  {% if versions is not none %}
+    {% if versions|length == 0 %}
+    <div class="alert alert-info">No requirement versions are on file for this access code yet. They're saved automatically each time you generate test cases &mdash; come back after your next run.</div>
+    {% elif versions|length == 1 %}
+    <div class="alert alert-info">Only one version is on file so far ({{ versions[0].label or versions[0].version_id }}, uploaded {{ versions[0].uploaded_at[:10] }}). Impact analysis needs two versions to compare &mdash; this will be ready after your next requirement upload.</div>
+    {% else %}
+
+    <form class="card form" action="/analyze-impact" method="post">
+      <input type="hidden" name="access_code" value="{{ access_code }}">
+      <p class="hint" style="margin-bottom:14px">Choose the two versions to compare. The earlier one is treated as the baseline.</p>
+      <label>Previous version
+        <select name="old_version_id" required>
+          {% for v in versions %}
+          <option value="{{ v.version_id }}">{{ v.label or v.version_id }} &mdash; {{ v.application }} &mdash; {{ v.uploaded_at[:10] }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>New version
+        <select name="new_version_id" required>
+          {% for v in versions %}
+          <option value="{{ v.version_id }}"{% if loop.last %} selected{% endif %}>{{ v.label or v.version_id }} &mdash; {{ v.application }} &mdash; {{ v.uploaded_at[:10] }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="submit">Compare These Versions</button>
+    </form>
+
+    {% endif %}
+  {% endif %}
+
+  <p class="footnote"><a href="/">&larr; Back to Req2QA</a></p>
+  </div>
+</div>
+{% include "_footer.html" %}
+</body>
+</html>

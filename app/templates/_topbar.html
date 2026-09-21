@@ -4,11 +4,18 @@
     <button type="button" class="topbar-toggle" aria-label="Open menu" aria-expanded="false" aria-controls="topbar-nav">&#9776;</button>
     <nav class="topbar-nav" id="topbar-nav">
       <a href="/about">About</a>
-      <a href="/about#how-it-works">How it works</a>
-      <a href="/see-it-in-action">See it in action</a>
-      <a href="/roi-calculator">ROI Calculator</a>
+      <details class="nav-drop">
+        <summary>Product</summary>
+        <div class="nav-drop-panel">
+          <a href="/about#how-it-works"><span class="nav-drop-label">How it works</span><span class="nav-drop-desc">The 3-step walkthrough</span></a>
+          <a href="/see-it-in-action"><span class="nav-drop-label">See it in action</span><span class="nav-drop-desc">A real run, not a mockup</span></a>
+          <a href="/roi-calculator"><span class="nav-drop-label">ROI Calculator</span><span class="nav-drop-desc">Estimate your time saved</span></a>
+          <a href="/import-tests"><span class="nav-drop-label">Import test cases</span><span class="nav-drop-desc">Bring your own suite for execution</span></a>
+        </div>
+      </details>
+      <a href="/pricing" class="nav-emphasis">Pricing</a>
       <a href="/security">Security</a>
-      <a href="/history">Run history</a>
+      <a href="/client-hub">Client Hub</a>
       <a href="/faq">FAQ</a>
     </nav>
     {% if not hide_trial_cta %}

@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<title>Req2QA — Saved Test Cases</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+{% include "_topbar.html" %}
+<div class="wrap wrap-wide">
+  <div class="narrow-inner">
+  <header class="hdr">
+    <h1>Saved Test Cases</h1>
+    <p class="sub">Come back to a set of test cases you've already generated and kept, and send it straight to execution &mdash; no re-uploading, no regenerating.</p>
+  </header>
+
+  <div class="alert alert-info" style="font-size:12.5px">
+    On paid engagements, we keep up to 5 of your most recent kept test-case sets (test case text only &mdash; no screenshots or execution evidence) for up to 90 days from the first set in that history. After 90 days, or once a 6th set is saved, the oldest set(s) are removed automatically. This is separate from, and does not extend, the 7-day retention on execution screenshots and reports, and is not available on free trial runs.
+  </div>
+
+  {% if error %}
+  <div class="alert">{{ error }}</div>
+  {% endif %}
+
+  <form class="card form" action="/test-case-history" method="post">
+    <label>Access code
+      <input type="password" name="access_code" required placeholder="Provided by your account manager" value="">
+    </label>
+    <button type="submit">Look Up My Saved Test Cases</button>
+  </form>
+
+  {% if sets is not none %}
+    {% if sets|length == 0 %}
+    <div class="alert alert-info">No saved test-case sets are on file for this access code yet. They're saved automatically each time you confirm which generated test cases to keep &mdash; come back after your next run.</div>
+    {% else %}
+    <div class="card" style="margin-top:20px">
+      <p class="hint" style="margin-bottom:14px">Pick a set below to go straight to execution setup for those test cases.</p>
+      {% for s in sets %}
+      <form action="/test-case-history/select" method="post" style="display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px 0;border-bottom:1px solid var(--border)">
+        <input type="hidden" name="access_code" value="{{ access_code }}">
+        <input type="hidden" name="set_id" value="{{ s.set_id }}">
+        <div>
+          <strong>{{ s.application }}</strong>
+          <div class="hint" style="margin-top:2px">{{ s.case_count }} test case{{ 's' if s.case_count != 1 else '' }} &middot; saved {{ s.saved_at[:10] }}{% if s.run_date %} &middot; run {{ s.run_date }}{% endif %}</div>
+        </div>
+        <button type="submit" class="btn secondary" style="white-space:nowrap">Execute These Test Cases</button>
+      </form>
+      {% endfor %}
+    </div>
+    {% endif %}
+  {% endif %}
+
+  <p class="footnote"><a href="/">&larr; Back to Req2QA</a></p>
+  </div>
+</div>
+{% include "_footer.html" %}
+</body>
+</html>
