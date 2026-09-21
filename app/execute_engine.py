@@ -80,17 +80,45 @@ CRITICAL_FIELD_KEYWORDS = [
     "credit card", "routing number", "medicare", "passport", "license",
 ]
 
-_MASK_CSS = """
-.__req2qa_masked__ {
-  background: #111 !important;
-  color: transparent !important;
-  border-radius: 3px;
-}
-"""
+# (mask styling is now applied inline per-element in _mask_critical_fields -
+# see its docstring for why a shared stylesheet class no longer works once
+# shadow-DOM fields are in scope)
 
 
 class ExecutionError(Exception):
     pass
+
+
+INTERACTIVE_SELECTOR = (
+    'input, textarea, select, button, a[href], label, [role="button"], '
+    '[role="link"], [role="tab"], [role="checkbox"], [role="radio"], [role="switch"]'
+)
+
+# Per-element JS run via Locator.evaluate (the element itself is `el` -
+# no querySelectorAll here, see the shadow-DOM note on _snapshot_elements).
+_ELEMENT_INFO_JS = """
+(el) => {
+    const rect = el.getBoundingClientRect();
+    const visible = rect.width > 0 && rect.height > 0 &&
+        getComputedStyle(el).visibility !== 'hidden' &&
+        getComputedStyle(el).display !== 'none';
+    const label = (
+        el.getAttribute('aria-label') ||
+        el.getAttribute('placeholder') ||
+        el.getAttribute('name') ||
+        el.innerText ||
+        el.value ||
+        el.id || ''
+    ).trim().slice(0, 80);
+    return {
+        tag: el.tagName.toLowerCase(),
+        type: el.getAttribute('type') || '',
+        role: el.getAttribute('role') || '',
+        label: label || (el.tagName.toLowerCase() === 'input' && el.getAttribute('type') === 'file' ? 'File upload' : ''),
+        visible: visible,
+    };
+}
+"""
 
 
 def _snapshot_elements(page) -> list:
@@ -98,7 +126,7 @@ def _snapshot_elements(page) -> list:
     element with a stable ref, its role, and its best-available label.
     Claude sees this list (never a screenshot) to decide what to do next -
     cheaper and far more robust than pixel-based computer-use for the kind
-    of dense, role/label-driven forms enterprise web apps are built from."""
+    of dense, role/label-driven forms enterprise web apps are built from.
     # Includes 'label' and [role="switch"] alongside the usual form controls -
     # many enterprise UI kits (OrangeHRM's toggle switches included) style a
     # checkbox input as visually-hidden/zero-size and put the actual visible,
@@ -111,48 +139,48 @@ def _snapshot_elements(page) -> list:
     # which was observed to loop until the step-limit BLOCKED cutoff.
     # Clicking a <label> (for= or wrapping) toggles its associated control
     # exactly like clicking the control itself, so this needs no new tool.
-    elements = page.evaluate(
-        """
-        () => {
-            const sel = 'input, textarea, select, button, a[href], label, [role="button"], [role="link"], [role="tab"], [role="checkbox"], [role="radio"], [role="switch"]';
-            const nodes = Array.from(document.querySelectorAll(sel));
-            return nodes.slice(0, 200).map((el, i) => {
-                const rect = el.getBoundingClientRect();
-                const visible = rect.width > 0 && rect.height > 0 &&
-                    getComputedStyle(el).visibility !== 'hidden' &&
-                    getComputedStyle(el).display !== 'none';
-                const label = (
-                    el.getAttribute('aria-label') ||
-                    el.getAttribute('placeholder') ||
-                    el.getAttribute('name') ||
-                    el.innerText ||
-                    el.value ||
-                    el.id || ''
-                ).trim().slice(0, 80);
-                return {
-                    ref: i,
-                    tag: el.tagName.toLowerCase(),
-                    type: el.getAttribute('type') || '',
-                    role: el.getAttribute('role') || '',
-                    label: label || (el.tagName.toLowerCase() === 'input' && el.getAttribute('type') === 'file' ? 'File upload' : ''),
-                    visible: visible,
-                };
-            // A <input type="file"> is kept even when CSS-hidden (display:none /
-            // zero-size) - a very common enterprise-UI pattern is a styled,
-            // visible wrapper (a photo-picker area, a "Choose File" button)
-            // that sits on top of a visually-hidden native file input. Filtering
-            // purely on 'visible' meant the agent could never get a ref to that
-            // input at all and would loop clicking decoy elements nearby,
-            // timing out every attempt (seen on OrangeHRM's profile-photo
-            // upload). Kept it filtered for every other element type, since
-            // that's still the right rule for everything that isn't a file
-            // input - added 2026-09-21, see the upload_file handler below for
-            // the matching change that acts on this ref directly and safely.
-            }).filter(e => (e.visible && e.label) || (e.tag === 'input' && e.type === 'file'));
-        }
-        """
-    )
-    return elements
+
+    SHADOW DOM: this used to run a single `page.evaluate` doing a raw
+    `document.querySelectorAll`, which cannot see into shadow DOM at all -
+    any control rendered inside a shadow root (as most Salesforce Lightning
+    Web Components and many ServiceNow/Angular-Material-style widgets do)
+    was invisible to the agent, not just hard to act on. Playwright's own
+    locator engine pierces OPEN shadow roots transparently for a plain CSS
+    selector, so this now enumerates via `page.locator(INTERACTIVE_SELECTOR)`
+    instead of a raw DOM query - same selector list, but shadow-DOM-inclusive
+    - and `_element_locator` below indexes into the exact same locator, so
+    the two stay in lock-step. CLOSED shadow roots remain genuinely
+    unreachable (true of every browser-automation tool, not a req2qa gap) -
+    nothing here can or should try to defeat that encapsulation. Added
+    2026-09-21 after a code review flagged the raw-query gap; not yet
+    validated against a real Salesforce or ServiceNow org - see the
+    execution notes before claiming this "fixes" either platform outright."""
+    locator = page.locator(INTERACTIVE_SELECTOR)
+    try:
+        count = min(locator.count(), 200)
+    except Exception:
+        return []
+    elements = []
+    for i in range(count):
+        try:
+            data = locator.nth(i).evaluate(_ELEMENT_INFO_JS)
+        except Exception:
+            # A node that disappeared/detached between count() and evaluate()
+            # (rare, but real on a dynamically re-rendering SPA) - skip it
+            # rather than aborting the whole snapshot over one stale ref.
+            continue
+        data["ref"] = i
+        elements.append(data)
+    # A <input type="file"> is kept even when CSS-hidden (display:none /
+    # zero-size) - a very common enterprise-UI pattern is a styled,
+    # visible wrapper (a photo-picker area, a "Choose File" button)
+    # that sits on top of a visually-hidden native file input. Filtering
+    # purely on 'visible' meant the agent could never get a ref to that
+    # input at all and would loop clicking decoy elements nearby,
+    # timing out every attempt (seen on OrangeHRM's profile-photo
+    # upload). Kept it filtered for every other element type, since
+    # that's still the right rule for everything that isn't a file input.
+    return [e for e in elements if (e["visible"] and e["label"]) or (e["tag"] == "input" and e["type"] == "file")]
 
 
 def _snapshot_fingerprint(page, elements: list) -> tuple:
@@ -163,9 +191,10 @@ def _snapshot_fingerprint(page, elements: list) -> tuple:
 
 
 def _element_locator(page, ref: int):
-    sel = 'input, textarea, select, button, a[href], label, [role="button"], [role="link"], [role="tab"], [role="checkbox"], [role="radio"], [role="switch"]'
-    all_matches = page.locator(sel)
-    return all_matches.nth(ref)
+    # Must use the exact same selector as _snapshot_elements (INTERACTIVE_SELECTOR)
+    # so a ref handed back by the agent indexes the same element both times -
+    # Playwright's locator pierces open shadow roots the same way in both places.
+    return page.locator(INTERACTIVE_SELECTOR).nth(ref)
 
 
 def _is_critical_label(label: str) -> bool:
@@ -173,46 +202,86 @@ def _is_critical_label(label: str) -> bool:
     return any(k in low for k in CRITICAL_FIELD_KEYWORDS)
 
 
+_MASK_FIELD_SELECTOR = 'input, textarea, select, [role="textbox"]'
+
+
 def _mask_critical_fields(page):
-    """Inject a class onto any currently-visible critical-category element
-    so the next screenshot renders it as an opaque block, then return a
-    cleanup function to remove that class again (so normal page behaviour
-    for the agent's own next snapshot is unaffected)."""
-    page.add_style_tag(content=_MASK_CSS)
-    marked_count = page.evaluate(
-        """
-        (keywords) => {
-            const sel = 'input, textarea, select, [role="textbox"]';
-            const nodes = Array.from(document.querySelectorAll(sel));
-            let n = 0;
-            for (const el of nodes) {
-                const label = (
-                    (el.getAttribute('aria-label') || '') + ' ' +
-                    (el.getAttribute('placeholder') || '') + ' ' +
-                    (el.getAttribute('name') || '') + ' ' +
-                    (el.id || '')
-                ).toLowerCase();
-                if (keywords.some(k => label.includes(k))) {
-                    el.classList.add('__req2qa_masked__');
-                    n++;
+    """Opaquely mask any currently-visible critical-category field before a
+    screenshot; call _unmask() again right after the screenshot is taken.
+
+    Previously this added a class via a raw `document.querySelectorAll` and
+    relied on an externally-injected <style> tag to render it opaque. Two
+    problems, both fixed here: (1) the raw query couldn't see a field inside
+    a shadow root at all - same class of gap as _snapshot_elements above -
+    so a password/credential field rendered inside a shadow-DOM component
+    would never be found or masked; (2) even if it HAD been found, shadow
+    DOM's style encapsulation means a class fed by a light-DOM stylesheet
+    does not reach into a shadow root, so the mask would silently fail to
+    render even on a correctly-found element. Both are fixed by (a)
+    enumerating via Playwright's locator engine, which pierces open shadow
+    roots, and (b) setting the masked appearance as inline style directly on
+    the element, which always applies regardless of shadow boundaries - no
+    external stylesheet involved. This matters more than the snapshot fix:
+    an unmasked credential field would leak into a saved screenshot, which
+    is exactly what the CREDENTIAL HANDLING contract at the top of this file
+    exists to prevent. Added 2026-09-21 alongside the shadow-DOM snapshot
+    fix; not yet validated against a real shadow-DOM login form."""
+    locator = page.locator(_MASK_FIELD_SELECTOR)
+    try:
+        count = min(locator.count(), 200)
+    except Exception:
+        return 0
+    marked = 0
+    for i in range(count):
+        try:
+            was_masked = locator.nth(i).evaluate(
+                """
+                (el, keywords) => {
+                    const label = (
+                        (el.getAttribute('aria-label') || '') + ' ' +
+                        (el.getAttribute('placeholder') || '') + ' ' +
+                        (el.getAttribute('name') || '') + ' ' +
+                        (el.id || '')
+                    ).toLowerCase();
+                    if (keywords.some(k => label.includes(k))) {
+                        el.dataset.req2qaPrevStyle = el.getAttribute('style') || '';
+                        el.style.setProperty('background', '#111', 'important');
+                        el.style.setProperty('color', 'transparent', 'important');
+                        el.style.setProperty('border-radius', '3px', 'important');
+                        return true;
+                    }
+                    return false;
                 }
-            }
-            return n;
-        }
-        """,
-        CRITICAL_FIELD_KEYWORDS,
-    )
-    return marked_count
+                """,
+                CRITICAL_FIELD_KEYWORDS,
+            )
+        except Exception:
+            continue
+        if was_masked:
+            marked += 1
+    return marked
 
 
 def _unmask(page):
-    page.evaluate(
-        """
-        () => {
-            document.querySelectorAll('.__req2qa_masked__').forEach(el => el.classList.remove('__req2qa_masked__'));
-        }
-        """
-    )
+    locator = page.locator(_MASK_FIELD_SELECTOR)
+    try:
+        count = min(locator.count(), 200)
+    except Exception:
+        return
+    for i in range(count):
+        try:
+            locator.nth(i).evaluate(
+                """
+                (el) => {
+                    if (el.dataset.req2qaPrevStyle !== undefined) {
+                        el.setAttribute('style', el.dataset.req2qaPrevStyle);
+                        delete el.dataset.req2qaPrevStyle;
+                    }
+                }
+                """
+            )
+        except Exception:
+            continue
 
 
 def _capture_screenshot(page, shots_dir: Path, label: str, rl=None, step_num: Optional[int] = None) -> str:
