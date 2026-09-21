@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
 </head>
 <body>
 {% include "_admin_topbar.html" %}
@@ -25,10 +25,14 @@
     code must be created below with an explicit service entitlement before it can be used (fail-closed
     default as of 2026-09-21). Once a quota exists, generation is blocked once either 5 attempts or
     1.5&times; the subscribed kept-case count is reached, whichever comes first &mdash; "Consumed" is
-    permanent once a client keeps a generated set. <strong>Service entitlement</strong> is a separate,
-    stricter gate controlling whether a code can use generation or execution at all, not just how much.
-    Use <strong>Add a new client</strong> below to onboard someone &mdash; it creates the code, quota,
-    and entitlement together, with no server restart needed.
+    permanent once a client keeps a generated set. <strong>Execution</strong> is metered separately: for
+    a client who generates here first, the execution limit is set automatically to however many test
+    cases they kept (no manual step needed). For an <strong>execution-only</strong> client who imports
+    their own test cases and never generates here, set the <strong>Execution limit</strong> field
+    explicitly below &mdash; otherwise their execution is currently unmetered. <strong>Service
+    entitlement</strong> is a separate, stricter gate controlling whether a code can use generation or
+    execution at all, not just how much. Use <strong>Add a new client</strong> below to onboard someone
+    &mdash; it creates the code, quota, and entitlement together, with no server restart needed.
   </div>
 
   {% if new_code %}
@@ -62,7 +66,7 @@
   {% if quotas %}
   <table class="data-table">
     <thead>
-      <tr><th>Client</th><th>Access code</th><th>Service</th><th>Subscribed</th><th>Consumed</th><th>Ceiling (1.5&times;)</th><th>Attempts</th><th>Updated</th><th></th></tr>
+      <tr><th>Client</th><th>Access code</th><th>Service</th><th>Subscribed</th><th>Consumed</th><th>Ceiling (1.5&times;)</th><th>Attempts</th><th>Execution limit</th><th>Updated</th><th></th></tr>
     </thead>
     <tbody>
     {% for q in quotas %}
@@ -76,6 +80,13 @@
       <td class="{% if q.consumed_count >= ceiling %}text-over{% elif q.consumed_count >= q.subscribed_count %}text-near{% endif %}">{{ q.consumed_count }}</td>
       <td>{{ ceiling }}</td>
       <td>{{ q.attempt_count }}/5</td>
+      <td>
+        {% if q.subscribed_execution_count is not none %}
+        <span class="{% if q.consumed_execution_count >= q.subscribed_execution_count %}text-over{% endif %}">{{ q.consumed_execution_count or 0 }} / {{ q.subscribed_execution_count }}</span>
+        {% else %}
+        <span class="hint">not set{% if stype != 'generation' %} (unlimited){% endif %}</span>
+        {% endif %}
+      </td>
       <td class="hint">{{ q.updated_at[:10] if q.updated_at else "" }}</td>
       <td>
         <form method="post" action="/admin/quotas/reset-attempts" style="margin:0">
@@ -114,6 +125,9 @@
             <option value="execution">Execution only (Tier 3)</option>
           </select>
         </label>
+        <label>Execution limit <span class="opt">(optional &mdash; leave blank if this client will generate here first; required for an execution-only client who imports their own test cases)</span>
+          <input type="number" name="subscribed_execution_count" min="1" placeholder="Leave blank to auto-set from generation">
+        </label>
         <button type="submit">Create client &amp; access code</button>
       </form>
     </div>
@@ -138,6 +152,9 @@
             <option value="generation">Generation only (Tier 1)</option>
             <option value="execution">Execution only (Tier 3)</option>
           </select>
+        </label>
+        <label>Execution limit <span class="opt">(optional &mdash; leave blank to keep whatever's already set)</span>
+          <input type="number" name="subscribed_execution_count" min="1" placeholder="Leave blank to leave unchanged">
         </label>
         <button type="submit">Save</button>
       </form>
