@@ -265,9 +265,21 @@ button:active,.btn:active{transform:scale(.98)}
    itself, works identically on desktop and mobile. */
 .nav-drop{position:relative}
 .nav-drop>summary{list-style:none;cursor:pointer;color:var(--text);
-  font-size:13.5px;font-weight:600;display:inline-flex;align-items:center;gap:4px}
+  font-size:13.5px;font-weight:600;display:inline-flex;align-items:center;gap:6px}
 .nav-drop>summary::-webkit-details-marker{display:none}
-.nav-drop>summary::after{content:"\25BE";font-size:10px;color:var(--muted);position:relative;top:1px}
+.nav-drop>summary::marker{content:""}
+/* A CSS-drawn triangle, not a Unicode arrow character (2026-09-21 - a real
+   client browser rendered the old "\25BE" glyph in a mismatched fallback
+   font/shape because the site's own fonts (Fraunces/Inter) don't define
+   that glyph, so the browser silently substituted a system font for just
+   that one character - exactly the "looks forcibly bolted on, different
+   font" bug reported live. Borders can't have a font-fallback problem;
+   this renders identically in every browser, with or without the custom
+   fonts having finished loading. */
+.nav-drop>summary::after{content:"";display:inline-block;width:0;height:0;
+  border-left:4px solid transparent;border-right:4px solid transparent;
+  border-top:5px solid var(--muted);margin-top:2px;flex-shrink:0}
+.nav-drop>summary:hover::after,.nav-drop[open]>summary::after{border-top-color:var(--blue)}
 .nav-drop>summary:hover,.nav-drop[open]>summary{color:var(--blue)}
 .nav-drop-panel{position:absolute;top:calc(100% + 12px);left:0;
   background:var(--cream-card);border:1px solid var(--border);border-radius:12px;
