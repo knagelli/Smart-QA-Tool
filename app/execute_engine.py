@@ -134,10 +134,21 @@ def _snapshot_elements(page) -> list:
                     tag: el.tagName.toLowerCase(),
                     type: el.getAttribute('type') || '',
                     role: el.getAttribute('role') || '',
-                    label: label,
+                    label: label || (el.tagName.toLowerCase() === 'input' && el.getAttribute('type') === 'file' ? 'File upload' : ''),
                     visible: visible,
                 };
-            }).filter(e => e.visible && e.label);
+            // A <input type="file"> is kept even when CSS-hidden (display:none /
+            // zero-size) - a very common enterprise-UI pattern is a styled,
+            // visible wrapper (a photo-picker area, a "Choose File" button)
+            // that sits on top of a visually-hidden native file input. Filtering
+            // purely on 'visible' meant the agent could never get a ref to that
+            // input at all and would loop clicking decoy elements nearby,
+            // timing out every attempt (seen on OrangeHRM's profile-photo
+            // upload). Kept it filtered for every other element type, since
+            // that's still the right rule for everything that isn't a file
+            // input - added 2026-09-21, see the upload_file handler below for
+            // the matching change that acts on this ref directly and safely.
+            }).filter(e => (e.visible && e.label) || (e.tag === 'input' && e.type === 'file'));
         }
         """
     )
@@ -583,9 +594,27 @@ def execute_test_case(
                                 path = uploads_dir / fname
                                 _generate_attachment_file(path, ftype)
                                 attachment_path[0] = path
-                            with page.expect_file_chooser(timeout=ACTION_TIMEOUT_MS) as fc_info:
-                                loc.click(timeout=ACTION_TIMEOUT_MS)
-                            fc_info.value.set_files(str(attachment_path[0]))
+                            # If the ref points straight at a native file input (the
+                            # common case now that the snapshot surfaces it even when
+                            # CSS-hidden - see _snapshot_elements above), set the file
+                            # directly. This needs no visibility/click at all, unlike
+                            # the file-chooser dance below, so it works reliably for a
+                            # visually-hidden input behind a styled upload widget
+                            # (added 2026-09-21, fixes a TimeoutError previously seen
+                            # on OrangeHRM's profile-photo upload).
+                            is_file_input = (
+                                (loc.evaluate("el => el.tagName.toLowerCase()") or "") == "input"
+                                and (loc.get_attribute("type") or "").lower() == "file"
+                            )
+                            if is_file_input:
+                                loc.set_input_files(str(attachment_path[0]))
+                            else:
+                                # ref is a visible trigger (button/label/div) whose
+                                # click pops the browser's native OS file dialog -
+                                # intercept that dialog instead.
+                                with page.expect_file_chooser(timeout=ACTION_TIMEOUT_MS) as fc_info:
+                                    loc.click(timeout=ACTION_TIMEOUT_MS)
+                                fc_info.value.set_files(str(attachment_path[0]))
                             result_payload = {"ok": True, "attached_filename": attachment_path[0].name}
                             step_log.append(f"Attached a file: {attachment_path[0].name}")
                             if rl is not None:
