@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<title>Req2QA — See It In Action</title>
+<meta name="description" content="A genuine Req2QA run against OrangeHRM's public demo — requirements in, validated test coverage out, real live-execution results.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+{% if canonical_url %}<link rel="canonical" href="{{ canonical_url }}">{% endif %}
+</head>
+<body>
+{% include "_topbar.html" %}
+<div class="wrap">
+  <header class="hdr">
+    <h1>See it in action</h1>
+    <p class="sub">A genuine Req2QA run — not a mockup. Requirements in, validated test coverage out, real live-execution results.</p>
+  </header>
+
+  <div class="alert alert-info" style="font-style:italic;font-size:12.5px">
+    <strong>OrangeHRM is a trademark of OrangeHRM Inc.</strong> This demonstration uses OrangeHRM's own public, open-source demo environment. Req2QA is not affiliated with, sponsored by, or endorsed by OrangeHRM.
+  </div>
+
+  <div class="card" style="line-height:1.75">
+    <h3 style="margin-bottom:8px">Input — a sample requirement</h3>
+    <p class="opt" style="margin-bottom:16px">
+      R1. The system shall allow an HR administrator to add a new employee record by providing first name, middle name (optional), and last name.<br>
+      R3. The system shall allow an HR administrator to optionally attach a profile photo (JPG, PNG, or GIF, up to 1MB).
+    </p>
+
+    <h3 style="margin-bottom:8px">Output — 3 of the test cases from this run</h3>
+    <p class="opt" style="margin-bottom:12px">Typical engagements run 25&ndash;300 test cases; this is a genuine excerpt, not a curated best case.</p>
+    <table style="width:100%;border-collapse:collapse;margin-bottom:16px;font-size:13.5px">
+      <tr style="background:var(--sky)">
+        <th style="text-align:left;padding:8px 10px">ID</th>
+        <th style="text-align:left;padding:8px 10px">Test case</th>
+        <th style="text-align:left;padding:8px 10px">Type</th>
+        <th style="text-align:left;padding:8px 10px">Result</th>
+      </tr>
+      <tr>
+        <td style="padding:8px 10px;border-top:1px solid var(--border);font-family:monospace;color:var(--blue);font-weight:700">TC-001</td>
+        <td style="padding:8px 10px;border-top:1px solid var(--border)">Add new employee with first, middle, and last name</td>
+        <td style="padding:8px 10px;border-top:1px solid var(--border)">Happy path</td>
+        <td style="padding:8px 10px;border-top:1px solid var(--border)"><span class="status-badge covered">PASS</span></td>
+      </tr>
+      <tr>
+        <td style="padding:8px 10px;border-top:1px solid var(--border);font-family:monospace;color:var(--blue);font-weight:700">TC-003</td>
+        <td style="padding:8px 10px;border-top:1px solid var(--border)">Attempt to add employee without a last name</td>
+        <td style="padding:8px 10px;border-top:1px solid var(--border)">Negative / validation</td>
+        <td style="padding:8px 10px;border-top:1px solid var(--border)"><span class="status-badge covered">PASS</span></td>
+      </tr>
+      <tr>
+        <td style="padding:8px 10px;border-top:1px solid var(--border);font-family:monospace;color:var(--blue);font-weight:700">TC-007</td>
+        <td style="padding:8px 10px;border-top:1px solid var(--border)">Attach a valid JPG profile photo within the 1MB limit</td>
+        <td style="padding:8px 10px;border-top:1px solid var(--border)">Edge case</td>
+        <td style="padding:8px 10px;border-top:1px solid var(--border)"><span class="status-badge covered">PASS</span></td>
+      </tr>
+    </table>
+    <p class="opt" style="margin-bottom:20px"><i>3 test cases executed, 3 passed, 0 failed, 0 blocked. Executed 2026-09-21.</i></p>
+
+    <h3 style="margin-bottom:12px">Live execution — real screenshots from this run</h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+      <div>
+        <img src="/static/proof/tc001.png" alt="TC-001 result: employee record created" style="width:100%;border:1px solid var(--border);border-radius:10px">
+        <p class="opt" style="margin-top:8px"><strong>TC-001</strong> — record created and saved successfully.</p>
+      </div>
+      <div>
+        <img src="/static/proof/tc003.png" alt="TC-003 result: validation error shown" style="width:100%;border:1px solid var(--border);border-radius:10px">
+        <p class="opt" style="margin-top:8px"><strong>TC-003</strong> — form correctly blocked save with a "Required" validation message.</p>
+      </div>
+    </div>
+    <div style="max-width:340px;margin-bottom:8px">
+      <img src="/static/proof/tc007.png" alt="TC-007 result: employee record with test photo attached" style="width:100%;border:1px solid var(--border);border-radius:10px">
+      <p class="opt" style="margin-top:8px"><strong>TC-007</strong> — the attached test photo is intentionally watermarked "generated by Req2QA &mdash; not a real document." We never use realistic-looking fake photos of real people as test data &mdash; see our <a href="/security">Security Overview</a> for how we handle test data generally.</p>
+    </div>
+
+    <div class="alert alert-warn" style="margin-top:20px">Every generated test case &mdash; including ones that don't pass &mdash; goes through a human review step before it's counted. That's not a formality: it's why the coverage above is trustworthy rather than just automated noise.</div>
+  </div>
+
+  <p class="footnote"><a href="/">&larr; Back to Req2QA</a></p>
+</div>
+{% include "_footer.html" %}
+</body>
+</html>

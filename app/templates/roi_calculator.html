@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<title>Req2QA — What Manual Testing Is Costing You</title>
+<meta name="description" content="Estimate what manual test writing is costing your team today, based on your own numbers.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+{% if canonical_url %}<link rel="canonical" href="{{ canonical_url }}">{% endif %}
+</head>
+<body>
+{% include "_topbar.html" %}
+<div class="wrap">
+  <header class="hdr">
+    <h1>See what manual test writing is costing you today</h1>
+    <p class="sub">A rough, honest estimate based on your own numbers &mdash; not a sales pitch. Adjust anything below.</p>
+  </header>
+
+  <section class="calc-band" id="calculator" style="margin-bottom:0">
+    <div class="card calc-card form">
+      <div class="calc-inputs">
+        <label>Test cases per release cycle
+          <input type="number" id="calc-tc" value="30" min="1" max="2000">
+        </label>
+        <label>Minutes to write one test case manually
+          <input type="number" id="calc-min" value="40" min="1" max="600">
+        </label>
+        <label>Release / test cycles per month
+          <input type="number" id="calc-cycles" value="2" min="1" max="30">
+        </label>
+        <label>Country (prefills a suggested rate below &mdash; optional)
+          <select id="calc-country">
+            <option value="">Choose a country&hellip;</option>
+            <option value="AU" selected>Australia</option>
+            <option value="US">United States</option>
+            <option value="UK">United Kingdom</option>
+            <option value="CA">Canada</option>
+            <option value="NZ">New Zealand</option>
+            <option value="IE">Ireland</option>
+            <option value="SG">Singapore</option>
+          </select>
+        </label>
+        <label>Hourly rate for whoever writes them (AUD)
+          <input type="number" id="calc-rate" value="45" min="1" max="500">
+          <span class="hint">Prefilled from general industry benchmark rates for the selected country, converted to AUD at an approximate, illustrative exchange rate &mdash; always editable, and actual rates vary by experience, market, and engagement type.</span>
+        </label>
+      </div>
+
+      <div class="calc-results">
+        <div class="card stat">
+          <div class="n" id="calc-out-hours">40</div>
+          <div class="l">hours/month writing test cases</div>
+        </div>
+        <div class="card stat">
+          <div class="n" id="calc-out-month">$1,800</div>
+          <div class="l">estimated cost/month</div>
+        </div>
+        <div class="card stat">
+          <div class="n" id="calc-out-year">$21,600</div>
+          <div class="l">estimated cost/year</div>
+        </div>
+      </div>
+
+      <a class="btn hero-cta-primary" id="calc-cta" href="mailto:kalyan@req2qa.com?subject=Access%20request%20-%20Req2QA&amp;body=Company%3A%20%0AWhat%20you%20are%20testing%20(platform%2Fapp)%3A%20%0A">Get a quote based on these numbers</a>
+      <p class="calc-note">This estimates only the manual effort you described above &mdash; it isn't Req2QA's price, which depends on your actual scope and is always quoted directly. All figures are shown in AUD; a country selection only prefills a suggested starting rate based on general industry benchmarks, converted using an approximate, illustrative exchange rate that moves over time &mdash; actual rates vary by experience, market, and engagement type, and the field is always yours to edit.</p>
+    </div>
+  </section>
+
+  <p class="footnote"><a href="/">&larr; Back to Req2QA</a></p>
+</div>
+{% include "_footer.html" %}
+<script src="/static/roi_calculator.js" defer></script>
+</body>
+</html>

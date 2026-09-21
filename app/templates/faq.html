@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<title>Req2QA — Frequently Asked Questions</title>
+<meta name="description" content="Answers to common questions about Req2QA — getting started, compatibility, pricing, privacy and security.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+{% if canonical_url %}<link rel="canonical" href="{{ canonical_url }}">{% endif %}
+</head>
+<body>
+{% include "_topbar.html" %}
+<div class="wrap">
+  <header class="hdr">
+    <h1>Frequently asked questions</h1>
+  </header>
+
+  <section class="faq-band" style="margin-bottom:0">
+    <div class="faq-group">
+      <p class="faq-group-title">Getting started</p>
+      <details class="faq-item">
+        <summary>Do I need a developer or automation experience to use this?</summary>
+        <p>No. Upload the documents you already have and follow the on-screen prompts &mdash; Req2QA handles the technical work of generating test coverage and, if you want it, running tests against your environment. You never write, read, or maintain a test script yourself.</p>
+      </details>
+
+      <details class="faq-item">
+        <summary>Should I trust AI-generated test cases?</summary>
+        <p>Think of it as hiring a fast, tireless junior tester &mdash; without the weeks it takes to recruit, onboard, and train one. Req2QA doesn't claim to be 100% accurate, and it doesn't remove the need for a human in the loop: every test case should be reviewed before you rely on it. What it does do is the time-consuming first pass to the best possible outcome, then hands it to you to approve, correct, or tick off &mdash; and because every test case is mapped back to the requirement it covers in a traceability matrix, you're reviewing targeted, mapped output rather than starting from scratch. Compare that to the actual cost of hiring a junior tester (recruiting, training, ramping up, and paying them to write the same coverage) &mdash; the time and money saved getting to "reviewed and approved" is the real value, not a claim of perfection.</p>
+      </details>
+
+      <details class="faq-item">
+        <summary>Can Req2QA test our custom-built (not off-the-shelf) application?</summary>
+        <p>Yes &mdash; Custom Application Mode reads a process-flow diagram and a short brief about your app, then confirms its understanding with you before generating anything.</p>
+      </details>
+    </div>
+
+    <div class="faq-group">
+      <p class="faq-group-title">Compatibility</p>
+      <details class="faq-item">
+        <summary>Does live execution work with every login and every application?</summary>
+        <p>Live execution works best with standard web applications using plain page structure and a standard username/password login. Some modern interfaces &mdash; particularly those built with heavily componentized, web-component-based frontends &mdash; can limit what our engine is currently able to see and interact with on a given screen. Applications that require hardware-token, smart-card, or biometric multi-factor login are also not currently supported, since there's no standard login step to automate &mdash; this is consistent with how other test-automation tools in the market handle these same login types today. As part of onboarding, we'll check your application's platform and login method with you first to confirm it's a good fit before any paid engagement begins.</p>
+      </details>
+    </div>
+
+    <div class="faq-group">
+      <p class="faq-group-title">Pricing</p>
+      <details class="faq-item">
+        <summary>What does this cost?</summary>
+        <p>Pricing is based on your test scope and how much live execution you need &mdash; not a flat subscription fee. <a href="mailto:kalyan@req2qa.com?subject=Access%20request%20-%20Req2QA&body=Company%3A%20%0AWhat%20you%20are%20testing%20(platform%2Fapp)%3A%20%0ARough%20timeline%3A%20%0A">Tell us what you're testing</a> and we'll quote a fair price for it.</p>
+      </details>
+    </div>
+
+    <div class="faq-group">
+      <p class="faq-group-title">Privacy &amp; security</p>
+      <details class="faq-item">
+        <summary>Is my data safe?</summary>
+        <p>Yes. Your credentials are used once, in memory, to run a live-execution test, and are never stored or logged. Uploaded documents are used only to generate your report and aren't retained afterward &mdash; only the resulting report is kept, and only for 7 days. Analysis is powered by a leading AI model, used solely to generate your report and never to train anyone else's model. See our <a href="/security">Security Overview</a> and <a href="/privacy">Privacy Policy</a> for the full detail.</p>
+      </details>
+
+      <details class="faq-item">
+        <summary>What happens to my uploaded documents?</summary>
+        <p>They're used only to generate your report and are not retained afterward. Only the resulting report and workbook are kept, for up to 7 days, reachable only via your private link &mdash; shown to you right after the run completes. Closed the tab before saving it? Look it up again anytime in <a href="/history">Run History</a> using your access code.</p>
+      </details>
+    </div>
+
+    <div class="faq-group">
+      <p class="faq-group-title">Considering your options</p>
+      <details class="faq-item">
+        <summary>Why not just build this myself with AI?</summary>
+        <p>You could &mdash; the same way you could build your own accounting software instead of buying one. What you're paying for isn't access to an AI model; anyone can get that. You're paying for the logic and sequencing already built and refined through hands-on testing against real-world requirements formats and live web applications &mdash; the weeks of trial and error it takes to get an AI agent to reliably read a spec, generate test cases that actually matter, map them to a traceability matrix, and drive a real browser through a live system without tripping over things like multi-step forms or toggle switches. Req2QA exists so you don't have to build and debug that yourself.</p>
+      </details>
+    </div>
+  </section>
+
+  <p class="footnote"><a href="/">&larr; Back to Req2QA</a></p>
+</div>
+{% include "_footer.html" %}
+</body>
+</html>

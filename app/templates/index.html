@@ -98,12 +98,10 @@
           <span class="browser-dot" style="background:#F4BF4F"></span>
           <span class="browser-dot" style="background:#61C554"></span>
           <div class="frame-tabs">
-            <button type="button" class="frame-tab active" data-panel="hero-panel-report">Test Report</button>
-            <button type="button" class="frame-tab" data-panel="hero-panel-trace">Traceability</button>
-            <button type="button" class="frame-tab" data-panel="hero-panel-gaps">Gaps</button>
+            <span class="frame-tab-label">Test Report</span>
           </div>
         </div>
-        <div class="browser-frame-body" id="hero-panel-report">
+        <div class="browser-frame-body">
           <div class="mock-report-hdr">
             <span class="mock-report-title">Acme Rostering &mdash; Test Coverage Report</span>
             <span class="mock-report-count">14 test cases</span>
@@ -129,123 +127,30 @@
             <span class="mock-pill mock-pill-pass">PASS</span>
           </div>
         </div>
-
-        <div class="browser-frame-body" id="hero-panel-trace" hidden>
-          <div class="mock-report-hdr">
-            <span class="mock-report-title">Acme Rostering &mdash; Requirements Traceability</span>
-            <span class="mock-report-count">4 requirements</span>
-          </div>
-          <div class="trace-row">
-            <span class="trace-req">REQ-01</span>
-            <span class="trace-desc">Managers can approve or reject leave requests</span>
-            <span class="trace-tcs">TC-001</span>
-            <span class="mock-pill mock-pill-pass">COVERED</span>
-          </div>
-          <div class="trace-row">
-            <span class="trace-req">REQ-02</span>
-            <span class="trace-desc">System prevents overlapping shift submissions</span>
-            <span class="trace-tcs">TC-002</span>
-            <span class="mock-pill mock-pill-pass">COVERED</span>
-          </div>
-          <div class="trace-row">
-            <span class="trace-req">REQ-03</span>
-            <span class="trace-desc">Affected staff are notified on roster publish</span>
-            <span class="trace-tcs">TC-003</span>
-            <span class="mock-pill mock-pill-partial">PARTIAL</span>
-          </div>
-          <div class="trace-row">
-            <span class="trace-req">REQ-04</span>
-            <span class="trace-desc">Timesheets reject negative hour entries</span>
-            <span class="trace-tcs">TC-004</span>
-            <span class="mock-pill mock-pill-pass">COVERED</span>
-          </div>
-        </div>
-
-        <div class="browser-frame-body" id="hero-panel-gaps" hidden>
-          <div class="mock-report-hdr">
-            <span class="mock-report-title">Acme Rostering &mdash; Gaps Found</span>
-            <span class="mock-report-count">2 flagged</span>
-          </div>
-          <div class="gap-row">
-            <div class="gap-hdr">
-              <span class="gap-title">Concurrent edits by two managers</span>
-              <span class="mock-pill mock-pill-gap">NOT SPECIFIED</span>
-            </div>
-            <span class="gap-note">Seen in the process flow (two manager roles can open the same roster) but no requirement says what should happen if both submit changes at once.</span>
-          </div>
-          <div class="gap-row">
-            <div class="gap-hdr">
-              <span class="gap-title">REQ-05 &mdash; &ldquo;system should handle errors gracefully&rdquo;</span>
-              <span class="mock-pill mock-pill-gap">AMBIGUOUS</span>
-            </div>
-            <span class="gap-note">No measurable pass/fail condition, so it can't be turned into a test case as written &mdash; needs a concrete definition of &ldquo;gracefully.&rdquo;</span>
-          </div>
-          <div class="gap-footnote">Gaps are drawn from what's actually in your documents &mdash; not guessed.</div>
-        </div>
       </div>
+      <p class="hero-visual-note">Illustrative example. <a href="/see-it-in-action">See a real run &rarr;</a></p>
     </div>
     </div>
   </header>
 
-  <!-- Time & cost calculator - estimates the cost of the CURRENT manual
-       process from numbers the visitor enters, not Req2QA's own price, so
-       it stays compatible with the quote-only pricing decision while still
-       making a concrete case. See claude/visual-consistency-type-scale-
-       plan-2026-09-15.md for the reasoning. -->
-  <section class="calc-band" id="calculator">
-    <h2 class="about-title">See what manual test writing is costing you today</h2>
-    <p class="intro-lede">A rough, honest estimate based on your own numbers &mdash; not a sales pitch. Adjust anything below.</p>
-    <div class="card calc-card form">
-      <div class="calc-inputs">
-        <label>Test cases per release cycle
-          <input type="number" id="calc-tc" value="30" min="1" max="2000">
-        </label>
-        <label>Minutes to write one test case manually
-          <input type="number" id="calc-min" value="40" min="1" max="600">
-        </label>
-        <label>Release / test cycles per month
-          <input type="number" id="calc-cycles" value="2" min="1" max="30">
-        </label>
-        <label>Country (prefills a suggested rate below &mdash; optional)
-          <select id="calc-country">
-            <option value="">Choose a country&hellip;</option>
-            <option value="AU" selected>Australia</option>
-            <option value="US">United States</option>
-            <option value="UK">United Kingdom</option>
-            <option value="CA">Canada</option>
-            <option value="NZ">New Zealand</option>
-            <option value="IE">Ireland</option>
-            <option value="SG">Singapore</option>
-          </select>
-        </label>
-        <label>Hourly rate for whoever writes them (AUD)
-          <input type="number" id="calc-rate" value="45" min="1" max="500">
-          <span class="hint">Prefilled from general industry benchmark rates for the selected country, converted to AUD at an approximate, illustrative exchange rate &mdash; always editable, and actual rates vary by experience, market, and engagement type.</span>
-        </label>
-      </div>
-
-      <div class="calc-results">
-        <div class="card stat">
-          <div class="n" id="calc-out-hours">40</div>
-          <div class="l">hours/month writing test cases</div>
-        </div>
-        <div class="card stat">
-          <div class="n" id="calc-out-month">$1,800</div>
-          <div class="l">estimated cost/month</div>
-        </div>
-        <div class="card stat">
-          <div class="n" id="calc-out-year">$21,600</div>
-          <div class="l">estimated cost/year</div>
-        </div>
-      </div>
-
-      <a class="btn hero-cta-primary" id="calc-cta" href="mailto:kalyan@req2qa.com?subject=Access%20request%20-%20Req2QA&amp;body=Company%3A%20%0AWhat%20you%20are%20testing%20(platform%2Fapp)%3A%20%0A">Get a quote based on these numbers</a>
-      <p class="calc-note">This estimates only the manual effort you described above &mdash; it isn't Req2QA's price, which depends on your actual scope and is always quoted directly. All figures are shown in AUD; a country selection only prefills a suggested starting rate based on general industry benchmarks, converted using an approximate, illustrative exchange rate that moves over time &mdash; actual rates vary by experience, market, and engagement type, and the field is always yours to edit.</p>
+  <!-- Compact "real proof" callout - links out to the full artefact page
+       rather than embedding it here, per council review 2026-09-21
+       (council-review-homepage-placement-proof-artefact-2026-09-21.md and
+       council-review-homepage-content-audit-2026-09-21.md): a homepage's
+       job is a fast gist + path to trying the tool, not proving every claim
+       inline. Full disclaimer/captions/screenshots live on their own page
+       where a genuinely interested visitor will actually read them. -->
+  <div class="proof-callout">
+    <span class="proof-callout-badge">3/3 PASS</span>
+    <div class="proof-callout-copy">
+      <strong>See a real run, not a mockup</strong>
+      A genuine req2qa run against a live application &mdash; requirements in, validated test coverage out, real execution results.
     </div>
-  </section>
+    <a class="btn secondary" href="/see-it-in-action">See it in action &rarr;</a>
+  </div>
 
   <section class="intro-band" id="what-it-does">
-    <p class="intro-lede">Req2QA turns the requirements documents you already have into structured test coverage — automatically. Upload what you've got, and get back validated test scenarios and a full traceability matrix in under a minute, with optional live execution against your own sandbox/UAT environment.</p>
+    <p class="about-body" style="max-width:none">Req2QA turns the requirements documents you already have into structured test coverage — automatically. Upload what you've got, and get back validated test scenarios and a full traceability matrix in under a minute, with optional live execution against your own sandbox/UAT environment.</p>
     <p class="intro-contact"><a href="/about#how-it-works">See the full 3-step walkthrough &rarr;</a></p>
   </section>
 
@@ -255,63 +160,18 @@
     <p class="about-body"><a href="/about#about">Read more about Req2QA and the person behind it &rarr;</a></p>
   </section>
 
-  <section class="faq-band" id="faq">
-    <h2 class="faq-title">Frequently asked questions</h2>
-
+  <!-- Single highest-objection-value FAQ item kept inline (right before the
+       CTA/chooser) per council review 2026-09-21 - this is the one question
+       doing real work defusing hesitation at the exact moment it matters.
+       Everything else moved to its own page: /faq. -->
+  <section class="faq-band" id="faq" style="margin-bottom:20px">
     <div class="faq-group">
-      <p class="faq-group-title">Getting started</p>
-      <details class="faq-item">
-        <summary>Do I need a developer or automation experience to use this?</summary>
-        <p>No. Upload the documents you already have and follow the on-screen prompts &mdash; Req2QA handles the technical work of generating test coverage and, if you want it, running tests against your environment. You never write, read, or maintain a test script yourself.</p>
-      </details>
-
       <details class="faq-item">
         <summary>Should I trust AI-generated test cases?</summary>
-        <p>Think of it as hiring a fast, tireless junior tester &mdash; without the weeks it takes to recruit, onboard, and train one. Req2QA doesn't claim to be 100% accurate, and it doesn't remove the need for a human in the loop: every test case should be reviewed before you rely on it. What it does do is the time-consuming first pass to the best possible outcome, then hands it to you to approve, correct, or tick off &mdash; and because every test case is mapped back to the requirement it covers in a traceability matrix, you're reviewing targeted, mapped output rather than starting from scratch. Compare that to the actual cost of hiring a junior tester (recruiting, training, ramping up, and paying them to write the same coverage) &mdash; the time and money saved getting to "reviewed and approved" is the real value, not a claim of perfection.</p>
-      </details>
-
-      <details class="faq-item">
-        <summary>Can Req2QA test our custom-built (not off-the-shelf) application?</summary>
-        <p>Yes &mdash; Custom Application Mode reads a process-flow diagram and a short brief about your app, then confirms its understanding with you before generating anything.</p>
+        <p>Think of it as hiring a fast, tireless junior tester &mdash; without the weeks it takes to recruit, onboard, and train one. Every test case should be reviewed before you rely on it; Req2QA does the time-consuming first pass, then hands it to you to approve, correct, or tick off.</p>
       </details>
     </div>
-
-    <div class="faq-group">
-      <p class="faq-group-title">Compatibility</p>
-      <details class="faq-item">
-        <summary>Does live execution work with every login and every application?</summary>
-        <p>Live execution works best with standard web applications using plain page structure and a standard username/password login. Some modern interfaces &mdash; particularly those built with heavily componentized, web-component-based frontends &mdash; can limit what our engine is currently able to see and interact with on a given screen. Applications that require hardware-token, smart-card, or biometric multi-factor login are also not currently supported, since there's no standard login step to automate &mdash; this is consistent with how other test-automation tools in the market handle these same login types today. As part of onboarding, we'll check your application's platform and login method with you first to confirm it's a good fit before any paid engagement begins.</p>
-      </details>
-    </div>
-
-    <div class="faq-group">
-      <p class="faq-group-title">Pricing</p>
-      <details class="faq-item">
-        <summary>What does this cost?</summary>
-        <p>Pricing is based on your test scope and how much live execution you need &mdash; not a flat subscription fee. <a href="mailto:kalyan@req2qa.com?subject=Access%20request%20-%20Req2QA&body=Company%3A%20%0AWhat%20you%20are%20testing%20(platform%2Fapp)%3A%20%0ARough%20timeline%3A%20%0A">Tell us what you're testing</a> and we'll quote a fair price for it.</p>
-      </details>
-    </div>
-
-    <div class="faq-group">
-      <p class="faq-group-title">Privacy &amp; security</p>
-      <details class="faq-item">
-        <summary>Is my data safe?</summary>
-        <p>Yes. Your credentials are used once, in memory, to run a live-execution test, and are never stored or logged. Uploaded documents are used only to generate your report and aren't retained afterward &mdash; only the resulting report is kept, and only for 7 days. Analysis is powered by a leading AI model, used solely to generate your report and never to train anyone else's model. See our <a href="/security">Security Overview</a> and <a href="/privacy">Privacy Policy</a> for the full detail.</p>
-      </details>
-
-      <details class="faq-item">
-        <summary>What happens to my uploaded documents?</summary>
-        <p>They're used only to generate your report and are not retained afterward. Only the resulting report and workbook are kept, for up to 7 days, reachable only via your private link &mdash; shown to you right after the run completes. Closed the tab before saving it? Look it up again anytime in <a href="/history">Run History</a> using your access code.</p>
-      </details>
-    </div>
-
-    <div class="faq-group">
-      <p class="faq-group-title">Considering your options</p>
-      <details class="faq-item">
-        <summary>Why not just build this myself with AI?</summary>
-        <p>You could &mdash; the same way you could build your own accounting software instead of buying one. What you're paying for isn't access to an AI model; anyone can get that. You're paying for the logic and sequencing already built and refined through hands-on testing against real-world requirements formats and live web applications &mdash; the weeks of trial and error it takes to get an AI agent to reliably read a spec, generate test cases that actually matter, map them to a traceability matrix, and drive a real browser through a live system without tripping over things like multi-step forms or toggle switches. Req2QA exists so you don't have to build and debug that yourself.</p>
-      </details>
-    </div>
+    <p class="footnote"><a href="/faq">Read the full FAQ &rarr;</a></p>
   </section>
 
   <div class="narrow-inner">
@@ -534,8 +394,6 @@
 </div>
 <div id="initial-tab" data-active-tab="{{ active_tab or '' }}" hidden></div>
 <script src="/static/chooser.js"></script>
-<script src="/static/roi_calculator.js" defer></script>
-<script src="/static/hero_tabs.js" defer></script>
 {% include "_footer.html" %}
 </body>
 </html>
