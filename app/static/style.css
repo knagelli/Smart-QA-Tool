@@ -235,7 +235,12 @@ button:active,.btn:active{transform:scale(.98)}
    app/static/logo.svg - since the trade mark application (TM Headstart,
    Class 42) is pending, not yet registered; do not swap to (R). */
 .topbar-logo-img{display:block;height:24px;width:auto}
-.topbar-nav{display:flex;gap:22px;flex:1}
+/* align-items:center is explicit (not the flex default of stretch) so the
+   plain <a> links and the <details>/<summary> dropdown - which have
+   slightly different natural heights - land on the same text baseline
+   instead of each being top/stretch-aligned independently. See the
+   "Product looks misaligned" report, 2026-09-21. */
+.topbar-nav{display:flex;align-items:center;gap:22px;flex:1}
 .topbar-nav a{color:var(--text);text-decoration:none;font-size:13.5px;font-weight:600}
 .topbar-nav a:hover{color:var(--blue)}
 .topbar-cta{padding:9px 20px;font-size:13.5px}
