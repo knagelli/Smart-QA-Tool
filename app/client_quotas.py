@@ -83,25 +83,49 @@ def get_quota(access_code: str) -> dict | None:
 SERVICE_TYPES = ("generation", "execution", "both")
 
 
-def set_quota(access_code: str, client_name: str, subscribed_count: int, service_type: str = "both") -> dict:
+def set_quota(
+    access_code: str,
+    client_name: str,
+    subscribed_count: int,
+    service_type: str = "both",
+    subscribed_execution_count: int | None = None,
+) -> dict:
     """Admin action: create or update a client's subscribed test-case count
     AND their service entitlement (added 2026-09-21 - see
     check_service_entitlement below for why this exists). Updating an
     existing client's subscribed_count/service_type does NOT reset their
     attempt_count or consumed_count - those persist across a quota change
-    (e.g. Kalyan raising a client's subscription mid-engagement)."""
+    (e.g. Kalyan raising a client's subscription mid-engagement).
+
+    `subscribed_execution_count` (added 2026-09-21 - see the admin "Execution
+    limit" field): an EXPLICIT admin-set execution allowance, independent of
+    set_execution_allowance()'s automatic "= however many test cases were
+    just kept" behavior. This closes a real gap: an execution-only client who
+    imports their own test cases (never generates through this tool) would
+    otherwise never have subscribed_execution_count set at all, and
+    check_can_execute/reserve_execution both fail-open to unlimited when it's
+    None - the same kind of silent unrestricted-by-default gap the
+    entitlement fix closed, just for quantity instead of access. Passing None
+    here (the default) leaves whatever value already exists untouched, so
+    this is opt-in and doesn't disturb the generation-then-execute flow's
+    existing auto-set behavior unless the admin deliberately sets a number."""
     if service_type not in SERVICE_TYPES:
         service_type = "both"
     with _lock:
         data = _load()
         existing = data.get(access_code, {})
+        resolved_execution_count = (
+            subscribed_execution_count
+            if subscribed_execution_count is not None
+            else existing.get("subscribed_execution_count")
+        )
         data[access_code] = {
             "client_name": client_name,
             "subscribed_count": subscribed_count,
             "service_type": service_type,
             "attempt_count": existing.get("attempt_count", 0),
             "consumed_count": existing.get("consumed_count", 0),
-            "subscribed_execution_count": existing.get("subscribed_execution_count"),
+            "subscribed_execution_count": resolved_execution_count,
             "consumed_execution_count": existing.get("consumed_execution_count", 0),
             "created_at": existing.get("created_at", _now_iso()),
             "updated_at": _now_iso(),

@@ -142,6 +142,32 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 # execute_engine.py - see report_builder.humanize_steps for the one shared
 # implementation reused by both templates and every report/xlsx builder.
 templates.env.filters["humanize_steps"] = humanize_steps
+
+
+def _compute_asset_version() -> str:
+    """A single cache-busting token derived from the newest mtime under
+    app/static/, computed once at process startup (2026-09-21 - see the
+    stale-topbar production incident this same day: a browser or CDN can
+    hold onto an old style.css/topbar.js indefinitely because /static/...
+    URLs never change between deploys, so a real content update can be live
+    on the server yet invisible to a client still holding a cached copy of
+    the CSS. Appending ?v=<this> to every static asset reference means the
+    URL itself changes whenever any static file changes, forcing a fresh
+    fetch - no manual version bump, no reliance on cache-control headers
+    being right at every layer (browser, and any CDN/proxy in front)."""
+    latest = 0
+    static_dir = BASE_DIR / "static"
+    for root, _dirs, files in os.walk(static_dir):
+        for name in files:
+            try:
+                latest = max(latest, int(os.path.getmtime(os.path.join(root, name))))
+            except OSError:
+                continue
+    return str(latest)
+
+
+ASSET_VERSION = _compute_asset_version()
+templates.env.globals["asset_version"] = ASSET_VERSION
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 # Troubleshooting-log dashboard - password-gated, never linked from any
 # client-facing page. See app/run_logger.py and app/admin_routes.py.

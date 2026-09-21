@@ -169,22 +169,35 @@ async def quotas_list(request: Request, new_code: str = "", new_client: str = ""
 
 
 @router.post("/admin/quotas/set")
-async def quotas_set(request: Request, access_code: str = Form(...), client_name: str = Form(...), subscribed_count: int = Form(...), service_type: str = Form(...)):
+async def quotas_set(request: Request, access_code: str = Form(...), client_name: str = Form(...), subscribed_count: int = Form(...), service_type: str = Form(...), subscribed_execution_count: str = Form("")):
     """Updates an EXISTING client's subscribed count and/or service
     entitlement. service_type is now required with no default (2026-09-21) -
     an admin submitting this form must actively choose, rather than a silent
     "both" going through unnoticed. For onboarding a brand-new client, use
-    "Add Client" below instead, which also generates the access code itself."""
+    "Add Client" below instead, which also generates the access code itself.
+
+    subscribed_execution_count is OPTIONAL and blank by default - left blank,
+    it does not touch whatever execution allowance already exists (still
+    auto-set to "however many were kept" for generation-then-execute
+    clients). Filled in, it's an explicit admin override - see
+    client_quotas.set_quota for why this exists (execution-only clients who
+    never generate through this tool otherwise never get one set at all)."""
     if not _is_authed(request):
         return RedirectResponse(url="/admin/login", status_code=303)
     if service_type not in client_quotas.SERVICE_TYPES:
         return RedirectResponse(url="/admin/quotas?error=Please+choose+a+service+entitlement.", status_code=303)
-    client_quotas.set_quota(access_code.strip(), client_name.strip(), subscribed_count, service_type.strip())
+    exec_count = None
+    if subscribed_execution_count.strip():
+        try:
+            exec_count = int(subscribed_execution_count.strip())
+        except ValueError:
+            return RedirectResponse(url="/admin/quotas?error=Execution+limit+must+be+a+whole+number.", status_code=303)
+    client_quotas.set_quota(access_code.strip(), client_name.strip(), subscribed_count, service_type.strip(), exec_count)
     return RedirectResponse(url="/admin/quotas", status_code=303)
 
 
 @router.post("/admin/clients/add")
-async def clients_add(request: Request, client_name: str = Form(...), subscribed_count: int = Form(...), service_type: str = Form(...), access_code: str = Form("")):
+async def clients_add(request: Request, client_name: str = Form(...), subscribed_count: int = Form(...), service_type: str = Form(...), access_code: str = Form(""), subscribed_execution_count: str = Form("")):
     """The single onboarding action for a brand-new paid client (2026-09-21
     - see council-review-entitlement-confidence-uplift-and-onboarding-2026-
     09-21.md). Creates the access code (auto-generated if left blank -
@@ -201,8 +214,14 @@ async def clients_add(request: Request, client_name: str = Form(...), subscribed
         return RedirectResponse(url="/admin/login", status_code=303)
     if service_type not in client_quotas.SERVICE_TYPES:
         return RedirectResponse(url="/admin/quotas?error=Please+choose+a+service+entitlement.", status_code=303)
+    exec_count = None
+    if subscribed_execution_count.strip():
+        try:
+            exec_count = int(subscribed_execution_count.strip())
+        except ValueError:
+            return RedirectResponse(url="/admin/quotas?error=Execution+limit+must+be+a+whole+number.", status_code=303)
     code = access_code.strip() or secrets.token_urlsafe(9)
-    client_quotas.set_quota(code, client_name.strip(), subscribed_count, service_type.strip())
+    client_quotas.set_quota(code, client_name.strip(), subscribed_count, service_type.strip(), exec_count)
     from urllib.parse import quote
     return RedirectResponse(
         url=f"/admin/quotas?new_code={quote(code)}&new_client={quote(client_name.strip())}",
