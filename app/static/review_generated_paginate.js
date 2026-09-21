@@ -5,10 +5,29 @@
   var searchInput = document.getElementById("tc-search");
   var countLine = document.getElementById("tc-count-line");
   var pager = document.getElementById("tc-pagination");
+  var selectAllBtn = document.getElementById("tc-select-all");
+  var deselectAllBtn = document.getElementById("tc-deselect-all");
   if (!list) return;
 
   var cards = Array.prototype.slice.call(list.querySelectorAll(".js-tc-card"));
   var currentPage = 1;
+
+  // Select All / Deselect All act on every "keep" checkbox for every test
+  // case card, regardless of the current search filter or pagination page -
+  // cards are never removed from the DOM, so this always affects the full
+  // set of generated test cases, never just what's currently visible.
+  function setAllKept(kept) {
+    cards.forEach(function(card){
+      var cb = card.querySelector('input[type="checkbox"]');
+      if (cb) cb.checked = kept;
+    });
+  }
+  if (selectAllBtn) {
+    selectAllBtn.addEventListener("click", function(){ setAllKept(true); });
+  }
+  if (deselectAllBtn) {
+    deselectAllBtn.addEventListener("click", function(){ setAllKept(false); });
+  }
 
   // Per-card expand/collapse - independent of search/pagination, and never
   // resets a card's Keep checkbox since the card itself is never removed
