@@ -13,4 +13,21 @@
   nav.querySelectorAll('a').forEach(function(a){
     a.addEventListener('click', function(){ nav.classList.remove('open'); });
   });
+
+  // Grouped nav dropdowns (<details class="nav-drop">, see style.css) -
+  // clicking outside an open one closes it, and opening one closes any
+  // other that's already open, so only one panel is ever showing at a time.
+  var drops = nav.querySelectorAll('.nav-drop');
+  drops.forEach(function(d){
+    d.addEventListener('toggle', function(){
+      if (d.open) {
+        drops.forEach(function(other){ if (other !== d) other.open = false; });
+      }
+    });
+  });
+  document.addEventListener('click', function(e){
+    drops.forEach(function(d){
+      if (d.open && !d.contains(e.target)) d.open = false;
+    });
+  });
 })();

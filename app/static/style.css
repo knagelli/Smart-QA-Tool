@@ -254,6 +254,118 @@ button:active,.btn:active{transform:scale(.98)}
   .topbar-inner{justify-content:space-between}
 }
 
+/* Grouped nav items (2026-09-21 topbar simplification - see
+   council-review-topbar-simplification-2026-09-21.md). As the site grew
+   (pricing, impact analysis, saved test cases...) the flat link list
+   started to read as cluttered rather than confident. Groups real,
+   functioning pages under a small number of top-level labels - still no
+   dropdown with nothing under it, just fewer, calmer entry points, closer
+   to how a consulting-style site organizes "Services"/"Resources". Native
+   <details>/<summary> - no extra JS needed for the open/close mechanic
+   itself, works identically on desktop and mobile. */
+.nav-drop{position:relative}
+.nav-drop>summary{list-style:none;cursor:pointer;color:var(--text);
+  font-size:13.5px;font-weight:600;display:inline-flex;align-items:center;gap:4px}
+.nav-drop>summary::-webkit-details-marker{display:none}
+.nav-drop>summary::after{content:"\25BE";font-size:10px;color:var(--muted);position:relative;top:1px}
+.nav-drop>summary:hover,.nav-drop[open]>summary{color:var(--blue)}
+.nav-drop-panel{position:absolute;top:calc(100% + 12px);left:0;
+  background:var(--cream-card);border:1px solid var(--border);border-radius:12px;
+  padding:8px;min-width:200px;box-shadow:0 10px 28px rgba(43,58,42,.12);
+  display:flex;flex-direction:column;gap:2px;z-index:40}
+.nav-drop-panel a{display:flex;flex-direction:column;gap:1px;padding:9px 12px;
+  border-radius:8px;text-decoration:none}
+.nav-drop-panel a:hover{background:var(--sky)}
+.nav-drop-label{font-size:13.5px;font-weight:600;color:var(--text)}
+.nav-drop-panel a:hover .nav-drop-label{color:var(--blue)}
+.nav-drop-desc{font-size:11.5px;color:var(--muted);font-weight:400}
+/* Pricing carries more visual weight than a plain utility link, next to the
+   CTA button, since it's the site's deliberate confidence signal (see
+   council-review-topbar-and-pricing-visual-design-critique-2026-09-21.md) -
+   not a full button, just enough to draw the eye ahead of "Security"/"FAQ". */
+.nav-emphasis{color:var(--navy) !important;position:relative}
+.nav-emphasis::after{content:"";position:absolute;left:0;right:0;bottom:-4px;
+  height:2px;background:var(--blue);border-radius:2px}
+@media (max-width:640px){
+  /* Inside the mobile slide-down panel, render the dropdown's contents
+     inline rather than as a floating absolute panel - it's already in a
+     stacked, scrollable context. */
+  .topbar-nav.open .nav-drop-panel{position:static;border:none;box-shadow:none;
+    padding:2px 0 2px 14px;margin-top:2px}
+}
+
+/* Homepage pricing teaser - see index.html for why this sits above the
+   proof callout rather than after it. Kept visually lighter than the proof
+   callout/hero (smaller type, no icon badges) so it reads as a supporting
+   confidence signal, not a hard sales pitch competing with the hero CTA. */
+.pricing-teaser{max-width:1040px;margin:0 auto 28px;padding:20px 20px 4px;
+  border-top:1px solid var(--border);border-bottom:1px solid var(--border);
+  text-align:center}
+.pricing-teaser-kicker{color:var(--muted);font-size:12px;font-weight:600;
+  letter-spacing:.02em;margin-bottom:14px}
+.pricing-teaser-row{display:flex;justify-content:center;gap:14px;
+  flex-wrap:wrap;margin-bottom:14px}
+.pricing-teaser-card{background:var(--cream-card);border:1px solid var(--border);
+  border-radius:12px;padding:12px 20px;min-width:150px}
+.pricing-teaser-tier{display:block;font-size:11.5px;color:var(--muted);
+  font-weight:600;margin-bottom:4px}
+.pricing-teaser-price{display:block;font-family:'Fraunces',Georgia,serif;
+  font-weight:700;font-size:19px;color:var(--navy)}
+.pricing-teaser-link{display:inline-block;margin-bottom:18px;font-size:13px;
+  font-weight:600;color:var(--blue);text-decoration:none}
+.pricing-teaser-link:hover{text-decoration:underline}
+@media (max-width:640px){.pricing-teaser-row{gap:10px}
+  .pricing-teaser-card{min-width:100px;padding:10px 14px}}
+
+/* Client Hub - single access-code entry, then a card per tool, greyed out
+   when the code's service_type (see client_quotas.py) excludes it. The
+   greying out is a UI reflection of the actual server-side gate, not a
+   substitute for it - every route behind these cards re-checks entitlement
+   itself, since a card being hidden here has never been treated as
+   security in this codebase. */
+.hub-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-top:20px}
+@media (max-width:640px){.hub-grid{grid-template-columns:1fr}}
+.hub-card{background:var(--cream-card);border:1px solid var(--border);
+  border-radius:16px;padding:20px}
+.hub-card h3{margin:0 0 6px 0;color:var(--navy);font-size:16px}
+.hub-card p{margin:0 0 4px 0;font-size:13px;color:var(--muted)}
+.hub-card-disabled{opacity:.55}
+.hub-card-note{font-size:12px;color:var(--red);font-weight:600;margin-top:10px}
+
+/* Internal admin pages (2026-09-21) - deliberately styled with the same
+   fonts/palette/components as client-facing pages (.card, .form, .alert,
+   .btn) rather than a bespoke inline stylesheet, so Kalyan isn't working in
+   a visually different "back office" product from the one clients see.
+   See council/design-review context: a solo-run tool's admin surface
+   looking cared-for is itself a (small) confidence signal, not just cosmetic. */
+.data-table{width:100%;border-collapse:collapse;margin-top:14px;font-size:13.5px}
+.data-table th,.data-table td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:middle}
+.data-table th{color:var(--muted);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.03em}
+.data-table td code{background:var(--sky);padding:2px 7px;border-radius:6px;font-size:12.5px}
+.badge{display:inline-block;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:700;
+  text-transform:uppercase;letter-spacing:.02em}
+.badge-both{background:var(--sky);color:var(--blue)}
+.badge-generation{background:#EAE3F5;color:#6B4FA0}
+.badge-execution{background:#F3E4D3;color:var(--purple)}
+.text-over{color:var(--red);font-weight:700}
+.text-near{color:var(--purple);font-weight:700}
+.admin-forms-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:16px}
+@media (max-width:720px){.admin-forms-grid{grid-template-columns:1fr}}
+.admin-forms-grid .card{margin-bottom:0}
+.new-code-display{display:inline-block;background:#fff;border:1px solid var(--border);
+  border-radius:8px;padding:8px 14px;font-family:'Fraunces',Georgia,serif;font-size:16px;
+  font-weight:700;color:var(--navy);margin-top:8px;letter-spacing:.01em}
+
+/* Admin-only topbar/footer (2026-09-21) - a trimmed nav for the password-
+   gated admin surface: only the admin's own tools (quotas, logs, trials,
+   test email, logout), none of the client-facing marketing/product links.
+   Reuses .topbar/.site-ftr structure and palette so it still reads as the
+   same product, just scoped to what an admin actually needs mid-task. */
+.admin-brand-tag{margin-left:8px;font-size:11px;font-weight:700;text-transform:uppercase;
+  letter-spacing:.04em;color:var(--muted);border:1px solid var(--border);border-radius:20px;
+  padding:2px 8px;vertical-align:middle}
+.admin-ftr .site-ftr-inner{grid-template-columns:2fr 1fr}
+
 .site-ftr{background:var(--navy);color:#EDEFE9;margin-top:64px}
 .site-ftr-inner{max-width:1040px;margin:0 auto;padding:48px 20px 32px;
   display:grid;grid-template-columns:1.6fr 1fr 1fr 1fr;gap:32px}
