@@ -17,6 +17,7 @@
 # on the login page below.
 
 import os
+import secrets
 from pathlib import Path
 
 from fastapi import APIRouter, Request, Form, UploadFile, File
@@ -146,22 +147,67 @@ async def trials_reset(request: Request, domain: str = Form(...)):
 
 
 @router.get("/admin/quotas", response_class=HTMLResponse)
-async def quotas_list(request: Request):
+async def quotas_list(request: Request, new_code: str = "", new_client: str = "", error: str = ""):
     if not _is_authed(request):
         return RedirectResponse(url="/admin/login", status_code=303)
     quotas = client_quotas.list_all_quotas()
-    return templates.TemplateResponse(request, "admin_quotas.html", {"quotas": quotas})
+    # Legacy/unconfigured-codes visibility (2026-09-21 - see council-review-
+    # entitlement-confidence-uplift-and-onboarding-2026-09-21.md): an env-var
+    # access code with no matching quota row here fail-opens to unrestricted
+    # ("both") and is otherwise invisible on this page - surface it loudly
+    # instead of leaving it silently absent from the table.
+    configured_codes = {q["access_code"] for q in quotas}
+    from . import main as _main_module  # local import - avoids a circular import at module load time
+    unconfigured = sorted(
+        {code: name for code, name in _main_module._load_access_codes().items() if code not in configured_codes}.items()
+    )
+    return templates.TemplateResponse(request, "admin_quotas.html", {
+        "quotas": quotas, "unconfigured": unconfigured,
+        "new_code": new_code, "new_client": new_client, "error": error,
+        "hide_trial_cta": True, "active_admin_nav": "quotas",
+    })
 
 
 @router.post("/admin/quotas/set")
-async def quotas_set(request: Request, access_code: str = Form(...), client_name: str = Form(...), subscribed_count: int = Form(...)):
-    """Sets/updates a client's subscribed test-case count. Creating a quota
-    here is what turns on enforcement for that access code - a code with no
-    quota configured is unrestricted (see client_quotas.py)."""
+async def quotas_set(request: Request, access_code: str = Form(...), client_name: str = Form(...), subscribed_count: int = Form(...), service_type: str = Form(...)):
+    """Updates an EXISTING client's subscribed count and/or service
+    entitlement. service_type is now required with no default (2026-09-21) -
+    an admin submitting this form must actively choose, rather than a silent
+    "both" going through unnoticed. For onboarding a brand-new client, use
+    "Add Client" below instead, which also generates the access code itself."""
     if not _is_authed(request):
         return RedirectResponse(url="/admin/login", status_code=303)
-    client_quotas.set_quota(access_code.strip(), client_name.strip(), subscribed_count)
+    if service_type not in client_quotas.SERVICE_TYPES:
+        return RedirectResponse(url="/admin/quotas?error=Please+choose+a+service+entitlement.", status_code=303)
+    client_quotas.set_quota(access_code.strip(), client_name.strip(), subscribed_count, service_type.strip())
     return RedirectResponse(url="/admin/quotas", status_code=303)
+
+
+@router.post("/admin/clients/add")
+async def clients_add(request: Request, client_name: str = Form(...), subscribed_count: int = Form(...), service_type: str = Form(...), access_code: str = Form("")):
+    """The single onboarding action for a brand-new paid client (2026-09-21
+    - see council-review-entitlement-confidence-uplift-and-onboarding-2026-
+    09-21.md). Creates the access code (auto-generated if left blank -
+    secrets.token_urlsafe, not a Kalyan-chosen memorable string), the quota,
+    AND the service entitlement in ONE action - no server restart, no
+    separate env-var edit, no second step to forget. service_type is
+    required with no default, same as quotas_set above.
+
+    _load_access_codes() in main.py merges client_quotas.json into the
+    valid-access-code list, so a client created here can log in and use the
+    tool immediately - CLIENT_ACCESS_CODES (the env var) is no longer the
+    only way to onboard someone, just the original/legacy one."""
+    if not _is_authed(request):
+        return RedirectResponse(url="/admin/login", status_code=303)
+    if service_type not in client_quotas.SERVICE_TYPES:
+        return RedirectResponse(url="/admin/quotas?error=Please+choose+a+service+entitlement.", status_code=303)
+    code = access_code.strip() or secrets.token_urlsafe(9)
+    client_quotas.set_quota(code, client_name.strip(), subscribed_count, service_type.strip())
+    from urllib.parse import quote
+    return RedirectResponse(
+        url=f"/admin/quotas?new_code={quote(code)}&new_client={quote(client_name.strip())}",
+        status_code=303,
+    )
 
 
 @router.post("/admin/quotas/reset-attempts")

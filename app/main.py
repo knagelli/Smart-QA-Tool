@@ -59,8 +59,10 @@ from fastapi.templating import Jinja2Templates
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .extract import extract_text
-from .qa_engine import run_qa_analysis, run_qa_analysis_custom, structure_existing_test_cases, match_requirements_to_test_cases
-from .report_builder import build_html, build_xlsx, build_html_custom, build_xlsx_custom, humanize_steps
+from .qa_engine import run_qa_analysis, run_qa_analysis_custom, structure_existing_test_cases, match_requirements_to_test_cases, analyze_requirements_impact
+from .report_builder import build_html, build_xlsx, build_html_custom, build_xlsx_custom, build_html_impact, humanize_steps
+from . import req_history
+from . import test_case_history
 from .diagram_parser import parse_flow_diagrams
 from .execute_engine import execute_test_case, ExecutionError
 from .execution_report import build_execution_report
@@ -236,9 +238,22 @@ async def _security_headers(request: Request, call_next):
 # Access control - fails CLOSED, not open, on misconfiguration.
 # --------------------------------------------------------------------------
 def _load_access_codes() -> dict:
-    """CLIENT_ACCESS_CODES env var: 'client_name:code,client_name2:code2'
-    Manual onboarding for a handful of clients - add a pair per new client,
-    restart the server. No database needed at this scale."""
+    """CLIENT_ACCESS_CODES env var: 'client_name:code,client_name2:code2' -
+    the original manual-onboarding path (add a pair, restart the server).
+    Kept working unchanged for whatever's already deployed there.
+
+    ADDITIVE as of 2026-09-21 (see council-review-entitlement-confidence-
+    uplift-and-onboarding-2026-09-21.md): also merges in any access code
+    created through /admin/quotas's "Add Client" action, which writes
+    directly into client_quotas.json. This is what lets a brand-new client
+    be fully onboarded - code, quota, AND service entitlement - in one
+    admin action with no server restart, instead of two disconnected steps
+    (edit the env var here, remember to also visit /admin/quotas later) -
+    the second step being exactly what let a new client end up with no
+    entitlement configured (silently unrestricted) in the first place.
+    A code present in BOTH sources with a different client_name in each is
+    a real misconfiguration (e.g. a typo) - logged loudly rather than
+    silently picking one, per the council's explicit callout."""
     raw = os.environ.get("CLIENT_ACCESS_CODES", "")
     codes = {}
     for pair in raw.split(","):
@@ -247,6 +262,28 @@ def _load_access_codes() -> dict:
             continue
         name, code = pair.split(":", 1)
         codes[code.strip()] = name.strip()
+
+    try:
+        for record in client_quotas.list_all_quotas():
+            ac = (record.get("access_code") or "").strip()
+            name = (record.get("client_name") or "").strip()
+            if not ac or not name:
+                continue
+            existing = codes.get(ac)
+            if existing and existing != name:
+                logger.warning(
+                    "Access code %r is configured with different client names in "
+                    "CLIENT_ACCESS_CODES (%r) and client_quotas.json (%r) - using "
+                    "the client_quotas.json value. Please reconcile this.",
+                    ac, existing, name,
+                )
+            codes[ac] = name  # client_quotas.json wins - it's the more deliberately configured source
+    except Exception as e:
+        # Never let a corrupt/unreadable quota store break basic access
+        # control for every other client - same fail-safe posture as the
+        # rest of this module's error handling.
+        logger.error("Failed to merge client_quotas access codes: %s", e)
+
     return codes
 
 
@@ -755,7 +792,7 @@ def _sweep_completed_runs():
 # or time-limited, and must never appear in a sitemap. When a new static,
 # publicly-crawlable page is added to the site, add its path here too.
 SITE_BASE_URL = "https://req2qa.com"
-PUBLIC_PAGE_PATHS = ["/", "/about", "/security", "/privacy", "/terms", "/trial-signup", "/import-tests", "/faq", "/roi-calculator", "/see-it-in-action"]
+PUBLIC_PAGE_PATHS = ["/", "/about", "/security", "/privacy", "/terms", "/trial-signup", "/import-tests", "/faq", "/roi-calculator", "/see-it-in-action", "/pricing"]
 
 
 def _canonical_url(path: str) -> str:
@@ -943,6 +980,11 @@ async def analyze(
         return templates.TemplateResponse(request, "index.html", {"error": e.detail}, status_code=e.status_code
         )
 
+    if trial is None:
+        allowed, block_reason = client_quotas.check_service_entitlement(access_code, "generation")
+        if not allowed:
+            return templates.TemplateResponse(request, "index.html", {"error": block_reason}, status_code=403)
+
     for field_name, field_value in (("application", application), ("baseline_version", baseline_version)):
         length_error = _check_field_length(field_value, field_name)
         if length_error:
@@ -1070,6 +1112,29 @@ async def analyze(
     data["run_date"] = _melbourne_now_str()
     data["baseline_version"] = baseline_version.strip()
     data["initials"] = initials
+
+    # Requirement Impact Analysis: save a version snapshot for paid clients
+    # only (a trial code is one-shot, so there is never a second version to
+    # compare against - see req_history.py's module docstring for the
+    # retention policy this enforces). Deliberately best-effort: a storage
+    # failure here must never break generation itself, which is why this is
+    # wrapped and logged rather than allowed to propagate - the client still
+    # gets their test cases either way, they just wouldn't get an impact
+    # comparison next time if this one save silently failed.
+    if trial is None:
+        try:
+            # test_cases is deliberately NOT set here - this is the full
+            # pre-curation candidate set, not what the client actually kept.
+            # /confirm-generated patches in the real, kept set once curation
+            # completes (see req_history.update_test_cases_by_run_id) - if
+            # the client never confirms, this version correctly keeps an
+            # empty test_cases list rather than one that was never real.
+            req_history.save_version(
+                access_code, application, req_text,
+                run_id=run_id, label=baseline_version.strip(),
+            )
+        except Exception as e:
+            _log_and_ref(e, "req_history.save_version failed in /analyze (non-fatal)")
 
     # Process Coverage Insights (Beta) - persist what the model returned so
     # the curation step (paid clients only) can show it for review/edit, and
@@ -1257,6 +1322,29 @@ async def confirm_generated(request: Request, run_id: str):
     data["test_scenarios"] = kept_cases
     data.pop("status", None)
 
+    # Requirement Impact Analysis: now that curation is final, patch the
+    # KEPT test-case set into the version snapshot saved during /analyze
+    # (see the comment there for why this can't happen in one step). Best-
+    # effort/non-fatal, same posture as the save in /analyze.
+    try:
+        req_history.update_test_cases_by_run_id(access_code, run_id, kept_cases)
+    except Exception as e:
+        _log_and_ref(e, "req_history.update_test_cases_by_run_id failed in /confirm-generated (non-fatal)")
+
+    # Persist this KEPT set into the 90-day cross-run test-case history, so a
+    # paid client can come back after this run's normal 8-day artifact
+    # window (RUN_RETENTION_SECONDS) has passed and still select these exact
+    # cases for execution, without regenerating or re-uploading anything.
+    # Trial runs are excluded (trial_signups already limits a trial code to
+    # one run, and this history is a paid-tier benefit - see
+    # test_case_history.py's disclosure). Best-effort/non-fatal, same
+    # posture as the req_history write above.
+    if trial_signups.lookup_trial(access_code) is None:
+        try:
+            test_case_history.save_case_set(access_code, run_id, data.get("application", ""), kept_cases, run_date=data.get("run_date", ""))
+        except Exception as e:
+            _log_and_ref(e, "test_case_history.save_case_set failed in /confirm-generated (non-fatal)")
+
     # Process Coverage Insights (Beta) - the curation screen is where the
     # client reviews/corrects the parsed process steps (per the consensus
     # design: reuse this existing screen rather than add a new confirm-step),
@@ -1384,6 +1472,10 @@ async def analyze_custom(
             },
             status_code=403,
         )
+
+    allowed, block_reason = client_quotas.check_service_entitlement(access_code, "generation")
+    if not allowed:
+        return templates.TemplateResponse(request, "index.html", {"error": block_reason, "active_tab": "custom"}, status_code=403)
 
     def err(msg, code=400):
         return templates.TemplateResponse(request, "index.html", {"error": msg, "active_tab": "custom"}, status_code=code
@@ -1644,6 +1736,15 @@ async def import_tests(
     except HTTPException as e:
         return err(e.detail, code=e.status_code)
 
+    # /import-tests is the Tier 3 (execution-only, client supplies their own
+    # test cases) entry point - gate it on "execution" entitlement so a
+    # generation-only (Tier 1) code can't use it to get free execution
+    # without ever paying for the execution tier. See
+    # client_quotas.check_service_entitlement.
+    allowed, block_reason = client_quotas.check_service_entitlement(access_code, "execution")
+    if not allowed:
+        return err(block_reason, code=403)
+
     length_error = _check_field_length(application, "application")
     if length_error:
         return err(length_error)
@@ -1893,6 +1994,16 @@ async def execute_select(request: Request, run_id: str):
     if data.get("status") == "awaiting_curation":
         raise HTTPException(status_code=409, detail="This run is still awaiting your review - please confirm which test cases to keep before running execution.")
 
+    # Defense in depth: the actual gate is on the POST below (which requires
+    # access_code as a submitted credential), but data.json already carries
+    # the access_code this run was generated under (see /analyze), so a
+    # generation-only code's run needn't even show the execution picker.
+    run_access_code = data.get("access_code")
+    if run_access_code:
+        allowed, block_reason = client_quotas.check_service_entitlement(run_access_code, "execution")
+        if not allowed:
+            raise HTTPException(status_code=403, detail=block_reason)
+
     test_cases = data.get("test_scenarios", [])
     return templates.TemplateResponse(request, "execute_select.html",
         {
@@ -1995,6 +2106,14 @@ async def execute_run(
         client_name = _check_access_no_trial(request, access_code)
     except HTTPException as e:
         return err(e.detail, code=e.status_code, test_cases=data.get("test_scenarios"), application=application)
+
+    # The actual enforcement point for "is this access code entitled to live
+    # execution at all" - see client_quotas.check_service_entitlement. A
+    # generation-only (Tier 1) code reaching this far (e.g. by guessing a
+    # run_id URL) is blocked here regardless of how it got here.
+    allowed, block_reason = client_quotas.check_service_entitlement(access_code, "execution")
+    if not allowed:
+        return err(block_reason, code=403, test_cases=data.get("test_scenarios"), application=application)
 
     try:
         _check_rate_limit(_execution_calls, access_code, EXECUTION_RATE_MAX, EXECUTION_RATE_WINDOW_SECONDS)
@@ -2606,6 +2725,282 @@ async def history_lookup(request: Request, access_code: str = Form(...), initial
             "initials": initials, "show_mine_default": show_mine_default,
             "hide_trial_cta": True,
         },
+    )
+
+
+@app.get("/requirement-history", response_class=HTMLResponse)
+async def requirement_history_form(request: Request):
+    return templates.TemplateResponse(request, "requirement_history.html", {"error": None, "versions": None, "access_code": ""})
+
+
+@app.post("/requirement-history", response_class=HTMLResponse)
+async def requirement_history_lookup(request: Request, access_code: str = Form(...)):
+    # Paid-only (see req_history.py) - a trial code is one-shot and can
+    # never have a second version to compare, so reject it the same way
+    # /import-tests and /execute already reject trial codes, rather than
+    # showing an always-empty list that looks like a bug.
+    try:
+        _check_access_no_trial(request, access_code)
+    except HTTPException as e:
+        return templates.TemplateResponse(request, "requirement_history.html",
+            {"error": e.detail, "versions": None, "access_code": ""}, status_code=e.status_code,
+        )
+
+    # Impact analysis is a generation-tier add-on (see council-review-impact-
+    # analysis-pricing-2026-09-21.md - available on paid Tier 1/2, since it
+    # depends on requirement text uploaded during generation). An execution-
+    # only (Tier 3) code never uploads requirements text in the first place,
+    # so gate it here rather than showing an always-empty history.
+    allowed, block_reason = client_quotas.check_service_entitlement(access_code, "generation")
+    if not allowed:
+        return templates.TemplateResponse(request, "requirement_history.html",
+            {"error": block_reason, "versions": None, "access_code": ""}, status_code=403,
+        )
+
+    try:
+        versions = req_history.list_versions(access_code)
+    except ValueError:
+        # _client_dir's sanitizer rejects a malformed access_code outright -
+        # _check_access_no_trial above already validated it against the real
+        # access-code list, so this should be unreachable in practice, but
+        # never let a storage-layer ValueError surface as a 500.
+        versions = []
+    except Exception as e:
+        ref = _log_and_ref(e, "req_history.list_versions failed in /requirement-history")
+        return templates.TemplateResponse(request, "requirement_history.html",
+            {"error": GENERIC_ERROR_MESSAGE.format(ref=ref), "versions": None, "access_code": ""}, status_code=500,
+        )
+
+    return templates.TemplateResponse(request, "requirement_history.html",
+        {"error": None, "versions": versions, "access_code": access_code, "hide_trial_cta": True},
+    )
+
+
+@app.post("/analyze-impact", response_class=HTMLResponse)
+async def analyze_impact(
+    request: Request,
+    access_code: str = Form(...),
+    old_version_id: str = Form(...),
+    new_version_id: str = Form(...),
+):
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        logger.error("ANTHROPIC_API_KEY is not configured.")
+        return templates.TemplateResponse(request, "requirement_history.html",
+            {"error": "This service is not yet available. Please contact the operator.", "versions": None, "access_code": ""},
+            status_code=500,
+        )
+
+    try:
+        _check_access_no_trial(request, access_code)
+    except HTTPException as e:
+        return templates.TemplateResponse(request, "requirement_history.html",
+            {"error": e.detail, "versions": None, "access_code": ""}, status_code=e.status_code,
+        )
+
+    allowed, block_reason = client_quotas.check_service_entitlement(access_code, "generation")
+    if not allowed:
+        return templates.TemplateResponse(request, "requirement_history.html",
+            {"error": block_reason, "versions": None, "access_code": ""}, status_code=403,
+        )
+
+    if old_version_id == new_version_id:
+        return templates.TemplateResponse(request, "requirement_history.html",
+            {"error": "Please choose two different versions to compare.", "versions": req_history.list_versions(access_code), "access_code": access_code, "hide_trial_cta": True},
+            status_code=400,
+        )
+
+    old_version = req_history.get_version(access_code, old_version_id)
+    new_version = req_history.get_version(access_code, new_version_id)
+    if old_version is None or new_version is None:
+        # Most likely cause: the version expired/was evicted (see
+        # req_history.py's retention policy) between the client loading the
+        # picker page and submitting this comparison, or a stale/tampered
+        # form value - either way, tell them plainly rather than a generic
+        # 500, since "please go back and look up your versions again" is a
+        # genuinely actionable answer here.
+        return templates.TemplateResponse(request, "requirement_history.html",
+            {
+                "error": "One of the selected versions is no longer available (it may have expired or been replaced by a newer upload). Please look up your requirement versions again.",
+                "versions": req_history.list_versions(access_code), "access_code": access_code, "hide_trial_cta": True,
+            },
+            status_code=404,
+        )
+
+    # Always compare in chronological order regardless of which dropdown the
+    # client picked which version into - "old"/"new" in the AI prompt and
+    # report only make sense oldest-first, and nothing stops a client
+    # picking them the "wrong" way round in the form.
+    if old_version["uploaded_at"] > new_version["uploaded_at"]:
+        old_version, new_version = new_version, old_version
+
+    old_text = req_history.get_version_text(access_code, old_version["version_id"])
+    new_text = req_history.get_version_text(access_code, new_version["version_id"])
+    if old_text is None or new_text is None:
+        ref = _log_and_ref(
+            Exception(f"version text missing for {old_version['version_id']}/{new_version['version_id']}"),
+            "req_history text missing in /analyze-impact",
+        )
+        return templates.TemplateResponse(request, "requirement_history.html",
+            {"error": GENERIC_ERROR_MESSAGE.format(ref=ref), "versions": req_history.list_versions(access_code), "access_code": access_code, "hide_trial_cta": True},
+            status_code=500,
+        )
+
+    old_app = (old_version.get("application") or "").strip()
+    new_app = (new_version.get("application") or "").strip()
+    if old_app and new_app and old_app.lower() != new_app.lower():
+        # A client with multiple applications under one access code (e.g. an
+        # agency, or one client running Req2QA against two of their own
+        # products) could otherwise pick two versions that were never the
+        # same application - comparing them is meaningless, not just
+        # unlikely to be useful, so this is refused outright rather than
+        # silently producing a nonsense diff.
+        return templates.TemplateResponse(request, "requirement_history.html",
+            {
+                "error": f"These two versions are for different applications ({old_app!r} vs {new_app!r}) and can't be compared. Please choose two versions of the same application.",
+                "versions": req_history.list_versions(access_code), "access_code": access_code, "hide_trial_cta": True,
+            },
+            status_code=400,
+        )
+    application = old_app or new_app
+
+    try:
+        result = await asyncio.to_thread(
+            analyze_requirements_impact, application, old_text, new_text, old_version.get("test_cases", []), api_key,
+        )
+    except Exception as e:
+        ref = _log_and_ref(e, "analyze_requirements_impact failed in /analyze-impact")
+        return templates.TemplateResponse(request, "requirement_history.html",
+            {"error": GENERIC_ERROR_MESSAGE.format(ref=ref), "versions": req_history.list_versions(access_code), "access_code": access_code, "hide_trial_cta": True},
+            status_code=502,
+        )
+
+    meta = {
+        "application": application,
+        "old_label": old_version.get("label") or old_version["version_id"],
+        "new_label": new_version.get("label") or new_version["version_id"],
+        "compared_at": _melbourne_now_str(),
+    }
+    return HTMLResponse(build_html_impact(result, meta))
+
+
+@app.get("/test-case-history", response_class=HTMLResponse)
+async def test_case_history_form(request: Request):
+    return templates.TemplateResponse(request, "test_case_history.html", {"error": None, "sets": None, "access_code": ""})
+
+
+@app.post("/test-case-history", response_class=HTMLResponse)
+async def test_case_history_lookup(request: Request, access_code: str = Form(...)):
+    # Paid-only, same gate as /requirement-history and /execute - trial
+    # codes never get this history (see test_case_history.py's disclosure).
+    try:
+        _check_access_no_trial(request, access_code)
+    except HTTPException as e:
+        return templates.TemplateResponse(request, "test_case_history.html",
+            {"error": e.detail, "sets": None, "access_code": ""}, status_code=e.status_code,
+        )
+
+    # This history's whole purpose is resuming EXECUTION on kept cases - a
+    # generation-only (Tier 1) code has nothing to do here even though it
+    # may have kept test cases of its own (see client_quotas.check_service_entitlement).
+    allowed, block_reason = client_quotas.check_service_entitlement(access_code, "execution")
+    if not allowed:
+        return templates.TemplateResponse(request, "test_case_history.html",
+            {"error": block_reason, "sets": None, "access_code": ""}, status_code=403,
+        )
+
+    try:
+        sets = test_case_history.list_sets(access_code)
+    except ValueError:
+        sets = []
+    except Exception as e:
+        ref = _log_and_ref(e, "test_case_history.list_sets failed in /test-case-history")
+        return templates.TemplateResponse(request, "test_case_history.html",
+            {"error": GENERIC_ERROR_MESSAGE.format(ref=ref), "sets": None, "access_code": ""}, status_code=500,
+        )
+
+    return templates.TemplateResponse(request, "test_case_history.html",
+        {"error": None, "sets": sets, "access_code": access_code, "hide_trial_cta": True},
+    )
+
+
+@app.post("/test-case-history/select", response_class=HTMLResponse)
+async def test_case_history_select(request: Request, access_code: str = Form(...), set_id: str = Form(...)):
+    """Rehydrates a persisted, out-of-window test-case set back into RUNS_DIR
+    (see test_case_history.rehydrate_run_dir) and hands off to the existing,
+    unmodified /execute/{run_id} flow - execution selection, running, and
+    billing all continue to work exactly as they do for a fresh run, because
+    from this point on there is no difference: a real data.json exists under
+    the original run_id."""
+    try:
+        _check_access_no_trial(request, access_code)
+    except HTTPException as e:
+        return templates.TemplateResponse(request, "test_case_history.html",
+            {"error": e.detail, "sets": None, "access_code": ""}, status_code=e.status_code,
+        )
+
+    try:
+        run_id = test_case_history.rehydrate_run_dir(access_code, set_id, RUNS_DIR)
+    except Exception as e:
+        ref = _log_and_ref(e, "test_case_history.rehydrate_run_dir failed in /test-case-history/select")
+        return templates.TemplateResponse(request, "test_case_history.html",
+            {"error": GENERIC_ERROR_MESSAGE.format(ref=ref), "sets": test_case_history.list_sets(access_code), "access_code": access_code, "hide_trial_cta": True},
+            status_code=500,
+        )
+
+    if run_id is None:
+        return templates.TemplateResponse(request, "test_case_history.html",
+            {
+                "error": "This test-case set is no longer available (it may have expired). Please look up your test-case history again.",
+                "sets": test_case_history.list_sets(access_code), "access_code": access_code, "hide_trial_cta": True,
+            },
+            status_code=404,
+        )
+
+    return RedirectResponse(url=f"/execute/{run_id}", status_code=303)
+
+
+@app.get("/pricing", response_class=HTMLResponse)
+async def pricing_page(request: Request):
+    return templates.TemplateResponse(request, "pricing.html", {"canonical_url": _canonical_url("/pricing"), "updated_date": _TRUST_PAGE_UPDATED})
+
+
+@app.get("/client-hub", response_class=HTMLResponse)
+async def client_hub_form(request: Request):
+    return templates.TemplateResponse(request, "client_hub.html", {"error": None, "access_code": None, "service_type": None})
+
+
+@app.post("/client-hub", response_class=HTMLResponse)
+async def client_hub_lookup(request: Request, access_code: str = Form(...)):
+    """Single-entry landing page for existing paid clients (2026-09-21 -
+    see council-review-client-tools-vs-client-hub-naming-2026-09-21.md).
+    Enters the access code ONCE, then shows exactly the tools this specific
+    code is entitled to - the same client_quotas.get_service_type this
+    session's other enforcement points check, so what's shown here always
+    matches what's actually allowed if clicked through, rather than being a
+    separate, driftable copy of that logic."""
+    try:
+        _check_access_no_trial(request, access_code)
+    except HTTPException as e:
+        return templates.TemplateResponse(request, "client_hub.html",
+            {"error": e.detail, "access_code": None, "service_type": None}, status_code=e.status_code,
+        )
+
+    service_type = client_quotas.get_service_type(access_code)
+    if service_type is None:
+        # Fail-closed as of 2026-09-21 (see client_quotas.check_service_entitlement):
+        # an access code with no entitlement configured yet is entitled to
+        # NOTHING, not "both" - showing the full hub_grid here would be wrong
+        # (every card would render enabled, since service_type != "generation"
+        # and != "execution" both hold for None). Show the same message the
+        # per-action gates would give instead of a hub full of dead ends.
+        return templates.TemplateResponse(request, "client_hub.html", {
+            "error": "This access code has not been configured with a service entitlement yet, "
+                     "so no actions are available on it. Please contact kalyan@req2qa.com.",
+            "access_code": None, "service_type": None,
+        })
+    return templates.TemplateResponse(request, "client_hub.html",
+        {"error": None, "access_code": access_code, "service_type": service_type, "hide_trial_cta": True},
     )
 
 

@@ -870,6 +870,130 @@ def build_xlsx_custom(data, flow, out_path):
     wb.save(out_path)
 
 
+# --------------------------------------------------------------------------- Impact analysis report (requirement version diff)
+def build_html_impact(result: dict, meta: dict) -> str:
+    """Standalone HTML report for a requirement-version impact comparison
+    (see app/req_history.py and qa_engine.analyze_requirements_impact).
+    `result` is the AI's structured diff output; `meta` carries display-only
+    context (application, version labels/dates, counts) that isn't part of
+    the AI's own output shape. Deliberately its own function rather than a
+    branch inside build_html() - same pattern as build_html_custom, kept
+    separate per the existing design note there ("keep Option A untouched")."""
+    changes = result.get("requirement_changes", [])
+    impacted = result.get("impacted_test_cases", [])
+    gaps = result.get("new_gaps", [])
+
+    added = sum(1 for c in changes if c.get("change_type") == "added")
+    modified = sum(1 for c in changes if c.get("change_type") == "modified")
+    removed = sum(1 for c in changes if c.get("change_type") == "removed")
+
+    change_badge = {
+        "added": '<span class="badge valid">ADDED</span>',
+        "modified": '<span class="badge flagged">MODIFIED</span>',
+        "removed": '<span class="badge gap">REMOVED</span>',
+    }
+    change_rows = []
+    for c in changes:
+        badge = change_badge.get(c.get("change_type", ""), esc(c.get("change_type", "")))
+        change_rows.append(
+            f'<tr><td><strong>{esc(c.get("req_id",""))}</strong></td><td>{badge}</td>'
+            f'<td>{esc(c.get("summary",""))}</td></tr>'
+        )
+    change_html = "\n".join(change_rows) if change_rows else '<tr><td colspan="3" class="empty">No substantive requirement changes detected between these two versions.</td></tr>'
+
+    impact_rows = []
+    for i in impacted:
+        impact_rows.append(
+            f'<tr><td><strong>{esc(i.get("tc_id",""))}</strong></td><td>{esc(i.get("req_id",""))}</td>'
+            f'<td>{esc(i.get("reason",""))}</td><td>{esc(i.get("recommendation",""))}</td></tr>'
+        )
+    impact_html = "\n".join(impact_rows) if impact_rows else '<tr><td colspan="4" class="empty">No existing test cases appear impacted by these changes.</td></tr>'
+
+    gap_html = "".join(f"<li>{esc(g)}</li>" for g in gaps) if gaps else "<li class=\"empty\">No new coverage gaps identified.</li>"
+
+    return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Requirement Impact Analysis</title>
+{FONT_LINKS}
+<style>
+*,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
+{PALETTE_CSS}
+body{{{BODY_FONT_CSS}background:var(--bg);color:var(--text);font-size:14px;line-height:1.6}}
+{CHROME_CSS}
+.wrap{{max-width:1200px;margin:0 auto;padding:32px 24px 64px}}
+.hdr{{background:var(--navy);color:#fff;border-radius:12px;padding:36px 40px;margin-bottom:28px}}
+.hdr h1{{{HEADING_FONT_CSS}font-size:24px;font-weight:700}}
+.hdr .sub{{color:#C7CEBB;font-size:13px;margin-top:6px}}
+.hdr .meta{{display:flex;gap:32px;margin-top:20px;flex-wrap:wrap}}
+.mi{{font-size:12px;color:#C7CEBB}}.mi strong{{display:block;color:#fff;font-size:13px;margin-bottom:2px}}
+.sc{{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:32px}}
+.card{{background:var(--cream-card);border:1px solid var(--border);border-radius:10px;padding:20px 14px;text-align:center}}
+.card .n{{font-size:34px;font-weight:700;line-height:1.1}}.card .l{{font-size:12px;color:var(--muted);margin-top:4px}}
+.card.good .n{{color:var(--green)}}.card.bad .n{{color:var(--red)}}
+.card.warn .n{{color:var(--amber)}}.card.info .n{{color:var(--blue)}}
+.st{{{HEADING_FONT_CSS}font-size:16px;font-weight:700;color:var(--navy);margin:36px 0 14px;padding-bottom:10px;
+border-bottom:2px solid var(--border);display:flex;align-items:center;gap:10px}}
+.pill{{font-family:'Inter',sans-serif;font-size:11px;font-weight:600;background:var(--sky);color:var(--blue);padding:2px 10px;border-radius:20px}}
+.tw{{overflow-x:auto;border-radius:10px;border:1px solid var(--border);margin-bottom:8px}}
+table{{width:100%;border-collapse:collapse;background:var(--cream-card);font-size:13px}}
+thead th{{background:var(--navy);color:#fff;padding:11px 14px;text-align:left;font-weight:600;font-size:12px;white-space:nowrap}}
+thead th:first-child{{border-radius:9px 0 0 0}}thead th:last-child{{border-radius:0 9px 0 0}}
+tbody tr{{border-bottom:1px solid var(--border)}}tbody tr:last-child{{border-bottom:none}}
+tbody tr:hover{{background:var(--sky)}}tbody td{{padding:10px 14px;vertical-align:top}}
+.empty{{text-align:center;color:var(--muted);padding:24px;font-style:italic}}
+.badge{{display:inline-block;font-size:11px;font-weight:600;padding:2px 9px;border-radius:4px;white-space:nowrap}}
+.badge.valid{{background:var(--gbg);color:var(--green)}}.badge.flagged{{background:var(--abg);color:var(--amber)}}
+.badge.gap{{background:var(--rbg);color:var(--red)}}
+.callout{{background:var(--pbg);border-left:3px solid var(--purple);border-radius:8px;padding:14px 18px;
+font-size:12.5px;color:var(--text);margin-bottom:14px;line-height:1.55}}
+.gaplist{{background:var(--cream-card);border:1px solid var(--border);border-radius:10px;padding:16px 20px 16px 36px}}
+.gaplist li{{margin-bottom:6px}}
+.ft{{margin-top:48px;text-align:center;font-size:12px;color:var(--muted);
+border-top:1px solid var(--border);padding-top:20px}}
+@media print{{.tw{{overflow:visible}}body{{background:#fff}}}}
+</style></head><body>
+{report_topbar_html()}
+<div class="wrap">
+<header class="hdr"><h1>Requirement Impact Analysis</h1>
+<p class="sub">What changed between two requirement versions, and which existing test cases may now need review</p>
+<div class="meta">
+<div class="mi"><strong>Application</strong>{esc(meta.get("application",""))}</div>
+<div class="mi"><strong>Previous Version</strong>{esc(meta.get("old_label",""))}</div>
+<div class="mi"><strong>New Version</strong>{esc(meta.get("new_label",""))}</div>
+<div class="mi"><strong>Compared</strong>{esc(meta.get("compared_at",""))}</div>
+</div></header>
+
+<div class="callout">This is a best-effort, AI-assisted comparison, not a guaranteed exhaustive audit &mdash; it is meant to focus a human review, not replace one. Purely cosmetic wording changes are deliberately excluded; only changes judged to affect actual system behaviour are listed below.</div>
+
+<div class="sc">
+<div class="card good"><div class="n">{added}</div><div class="l">Requirements Added</div></div>
+<div class="card warn"><div class="n">{modified}</div><div class="l">Requirements Modified</div></div>
+<div class="card bad"><div class="n">{removed}</div><div class="l">Requirements Removed</div></div>
+<div class="card bad"><div class="n">{len(impacted)}</div><div class="l">Test Cases Possibly Impacted</div></div>
+</div>
+
+<h2 class="st">Requirement Changes <span class="pill">TABLE 1</span></h2>
+<div class="tw"><table><thead><tr>
+<th style="width:100px">Req ID</th><th style="width:110px">Change</th><th>Summary</th>
+</tr></thead><tbody>
+{change_html}
+</tbody></table></div>
+
+<h2 class="st">Existing Test Cases That May Need Review <span class="pill">TABLE 2</span></h2>
+<div class="tw"><table><thead><tr>
+<th style="width:90px">TC ID</th><th style="width:90px">Req ID</th><th>Reason</th><th style="width:22%">Recommendation</th>
+</tr></thead><tbody>
+{impact_html}
+</tbody></table></div>
+
+<h2 class="st">New Coverage Gaps <span class="pill">TABLE 3</span></h2>
+<ul class="gaplist">{gap_html}</ul>
+
+<div class="ft">Generated by Req2QA &mdash; requirement impact analysis is a review aid; always confirm impacted test cases with a human review before relying on this comparison alone.</div>
+</div>
+</body></html>"""
+
+
 def main():
     if len(sys.argv) != 4:
         print("Usage: python3 build_test_scenarios_output.py data.json report_out.html data_out.xlsx")

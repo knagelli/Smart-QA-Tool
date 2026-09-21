@@ -508,3 +508,130 @@ def match_requirements_to_test_cases(application: str, requirements_text: str, t
 
     raw = "".join(block.text for block in resp.content if block.type == "text")
     return _parse_json_response(raw)
+
+
+# --------------------------------------------------------------------------- Impact analysis (requirement version diff)
+IMPACT_SYSTEM_PROMPT = (
+    "You analyze the difference between two versions of a requirements document for the "
+    "same application, and the effect that difference has on an existing set of test "
+    "cases written against the OLDER version. Be conservative and literal, the same way "
+    "a careful human QA lead reviewing a diff would be:\n"
+    "- Ignore purely cosmetic changes (rewording, reordering, typo fixes, formatting) that "
+    "do not change what the system must do - do not report these as changes.\n"
+    "- Only report a requirement as MODIFIED when its actual behaviour/scope changed.\n"
+    "- Only mark an existing test case as impacted when the requirement it was written "
+    "against was modified or removed - never guess an impact on a test case whose "
+    "requirement is unchanged, even if it happens to sit near a change in the document.\n"
+    "- When genuinely unsure whether a change is substantive, say so in the notes rather "
+    "than silently deciding either way - a false 'no impact' is worse than an honest "
+    "'review this one manually'.\n"
+    "- Never invent requirements, requirement IDs, or test cases that are not present in "
+    "the input."
+)
+
+IMPACT_PROMPT_TEMPLATE = """APPLICATION: {application}
+
+OLDER REQUIREMENTS VERSION:
+{old_text}
+
+NEWER REQUIREMENTS VERSION:
+{new_text}
+
+LINE-LEVEL DIFF (for reference only - reason about substance, not line noise):
+{unified_diff}
+
+EXISTING TEST CASES written against the OLDER version (do not modify or rewrite these):
+{old_test_cases_json}
+
+Identify, for each requirement present in either version:
+- "added": present only in the newer version
+- "removed": present only in the older version
+- "modified": present in both, but its behaviour/scope substantively changed
+- "unchanged": present in both with no substantive change (omit these from the output -
+  only list requirements that actually changed in some way)
+
+Then identify which of the existing test cases are impacted (their req_id was modified or
+removed) and give a short reason and a recommendation for each.
+
+Respond with ONLY this JSON object (no other text):
+{{
+  "requirement_changes": [
+    {{"req_id": "REQ-003", "change_type": "modified", "summary": "<what changed, one sentence>"}}
+  ],
+  "impacted_test_cases": [
+    {{"tc_id": "TC-005", "req_id": "REQ-003", "reason": "<why this test case is now in question>", "recommendation": "re-review before next run"}}
+  ],
+  "new_gaps": ["REQ-010 is new and has no existing test case coverage"]
+}}
+"""
+
+
+def line_diff(old_text: str, new_text: str, context_lines: int = 2) -> str:
+    """Cheap, deterministic, zero-AI-cost first pass: a standard unified
+    diff between two requirement versions. Computed unconditionally (it's
+    nearly free) and handed to the AI as reference context alongside the
+    full text of both versions - the AI still reasons over the actual
+    requirement wording, this just points it at where the changes are
+    rather than making it re-discover them by comparing two full documents
+    from scratch."""
+    import difflib
+
+    old_lines = old_text.splitlines(keepends=True)
+    new_lines = new_text.splitlines(keepends=True)
+    diff = difflib.unified_diff(
+        old_lines, new_lines,
+        fromfile="previous version", tofile="new version",
+        n=context_lines,
+    )
+    # Capped - a very large diff would blow the prompt budget for no benefit;
+    # the AI still has the full old_text/new_text above to reason over even
+    # if the diff itself is truncated.
+    text = "".join(diff)
+    return text[:20000]
+
+
+def analyze_requirements_impact(
+    application: str,
+    old_text: str,
+    new_text: str,
+    old_test_cases: list,
+    api_key: str,
+) -> dict:
+    """Compares two requirement versions for the same client/application and
+    flags which of the OLDER version's test cases are now in question. This
+    never re-generates or modifies test cases itself - it is a review aid,
+    the same "heuristic, not deterministic, be conservative" posture as
+    match_requirements_to_test_cases above, for the same reason: it is
+    inferring semantic impact after the fact, not verifying a ground truth."""
+    client = ai_client.get_client(api_key)
+
+    diff_text = line_diff(old_text, new_text)
+    tc_summary = [
+        {"tc_id": tc.get("tc_id", ""), "req_id": tc.get("req_id", ""), "title": tc.get("title", "")}
+        for tc in old_test_cases
+    ]
+    prompt = IMPACT_PROMPT_TEMPLATE.format(
+        application=application.strip(),
+        old_text=old_text.strip()[:60000],
+        new_text=new_text.strip()[:60000],
+        unified_diff=diff_text or "(no line-level differences detected)",
+        old_test_cases_json=json.dumps(tc_summary),
+    )
+
+    resp = client.messages.create(
+        model=ai_client.get_model_id(),
+        max_tokens=8000,
+        temperature=0,
+        system=IMPACT_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    raw = "".join(block.text for block in resp.content if block.type == "text")
+    result = _parse_json_response(raw)
+    # Defensive shape guarantee - callers (main.py, report rendering) should
+    # never need a try/except around missing keys just because the model's
+    # JSON happened to omit an empty list.
+    result.setdefault("requirement_changes", [])
+    result.setdefault("impacted_test_cases", [])
+    result.setdefault("new_gaps", [])
+    return result

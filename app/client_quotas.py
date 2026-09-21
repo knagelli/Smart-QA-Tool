@@ -19,11 +19,18 @@
 #     retroactively invalidate an already-confirmed kept set from an earlier
 #     run; it simply starts a new, separate run.
 #   - A client with NO quota configured (get_quota returns None) is allowed
-#     to generate without restriction - this is a deliberate fail-open
-#     default so existing/legacy clients (onboarded before this system
-#     existed) are unaffected until Kalyan explicitly sets a quota for them.
-#     This is a default worth Kalyan revisiting once quotas are the norm
-#     rather than the exception.
+#     to GENERATE without a quantity restriction - see check_can_generate/
+#     check_can_execute below. This remains fail-open for the quantity
+#     ceilings only.
+#   - SERVICE ENTITLEMENT (which of generation/execution/both a code may use
+#     at all) is fail-CLOSED as of 2026-09-21 (see get_service_type/
+#     check_service_entitlement below) - changed once Kalyan confirmed there
+#     is no existing client base yet, so every access code from here forward
+#     is created through the admin "Add Client" flow, which requires an
+#     explicit entitlement choice with no default. An access code with no
+#     quota record at all has no entitlement and is blocked from both
+#     generation and execution until one is set - there is no more silent
+#     "unconfigured = unrestricted" case for entitlement.
 #
 # Same file-based JSON + threading.Lock pattern as trial_signups.py, and the
 # same single-process caveat applies: this store is only correct under
@@ -73,24 +80,92 @@ def get_quota(access_code: str) -> dict | None:
         return data.get(access_code)
 
 
-def set_quota(access_code: str, client_name: str, subscribed_count: int) -> dict:
-    """Admin action: create or update a client's subscribed test-case count.
-    Updating an existing client's subscribed_count does NOT reset their
+SERVICE_TYPES = ("generation", "execution", "both")
+
+
+def set_quota(access_code: str, client_name: str, subscribed_count: int, service_type: str = "both") -> dict:
+    """Admin action: create or update a client's subscribed test-case count
+    AND their service entitlement (added 2026-09-21 - see
+    check_service_entitlement below for why this exists). Updating an
+    existing client's subscribed_count/service_type does NOT reset their
     attempt_count or consumed_count - those persist across a quota change
     (e.g. Kalyan raising a client's subscription mid-engagement)."""
+    if service_type not in SERVICE_TYPES:
+        service_type = "both"
     with _lock:
         data = _load()
         existing = data.get(access_code, {})
         data[access_code] = {
             "client_name": client_name,
             "subscribed_count": subscribed_count,
+            "service_type": service_type,
             "attempt_count": existing.get("attempt_count", 0),
             "consumed_count": existing.get("consumed_count", 0),
+            "subscribed_execution_count": existing.get("subscribed_execution_count"),
+            "consumed_execution_count": existing.get("consumed_execution_count", 0),
             "created_at": existing.get("created_at", _now_iso()),
             "updated_at": _now_iso(),
         }
         _save(data)
         return dict(data[access_code])
+
+
+def get_service_type(access_code: str) -> str | None:
+    """What this access code is entitled to: 'generation', 'execution', or
+    'both' - or None if no entitlement has ever been configured for it.
+
+    Fail-CLOSED as of 2026-09-21: a code with NO quota record at all returns
+    None (no entitlement), not 'both'. The only backward-compatibility case
+    left is a quota record that EXISTS but predates the service_type field
+    (added 2026-09-21, before any real client existed) - that still defaults
+    to 'both' so a record already saved under the old shape isn't silently
+    locked out. Every new record is created through set_quota(), which
+    already requires an explicit, validated service_type - so this fallback
+    should see fewer and fewer real hits over time and can eventually be
+    removed."""
+    quota = get_quota(access_code)
+    if quota is None:
+        return None
+    return quota.get("service_type") or "both"
+
+
+def check_service_entitlement(access_code: str, needed: str) -> tuple[bool, str | None]:
+    """Returns (allowed, block_reason). This is the actual anti-abuse gate
+    Kalyan asked for 2026-09-21: without it, ANY valid paid access code
+    could call both /analyze (generation) and /execute (live execution)
+    regardless of which tier the client actually paid for - a generation-
+    only (Tier 1) client could run live execution for free, or an
+    execution-only (Tier 3) client could generate test cases for free
+    instead of paying for Tier 1/2. The per-count quota checks elsewhere in
+    this module (check_can_generate/check_can_execute) only ever limited
+    HOW MANY, never WHETHER a given action was in scope at all.
+
+    `needed` is "generation" or "execution" - the action being attempted,
+    not the client's entitlement. Fail-CLOSED as of 2026-09-21: an
+    unconfigured code (get_service_type returns None) is now BLOCKED from
+    everything, not waved through - Kalyan confirmed there is no existing
+    client base to protect from this change, so the safer default was
+    adopted immediately rather than phased in with a grace period. Every
+    access code must be created via the admin "Add Client" flow (which
+    forces an explicit entitlement choice) before it can generate or
+    execute anything."""
+    service_type = get_service_type(access_code)
+    if service_type is None:
+        return False, (
+            "This access code has not been configured with a service entitlement yet, "
+            "so no actions are available on it. Please contact kalyan@req2qa.com."
+        )
+    if service_type == "both" or service_type == needed:
+        return True, None
+    action_label = {"generation": "test case generation", "execution": "live execution"}.get(needed, needed)
+    entitlement_label = {
+        "generation": "test case generation only",
+        "execution": "live execution only",
+    }.get(service_type, service_type)
+    return False, (
+        f"This access code is scoped to {entitlement_label}, so {action_label} isn't available on it. "
+        "If you need this as part of your engagement, please contact kalyan@req2qa.com."
+    )
 
 
 def reset_attempts(access_code: str) -> bool:
