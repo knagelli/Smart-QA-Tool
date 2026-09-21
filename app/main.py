@@ -178,9 +178,10 @@ async def _branded_http_exception_handler(request: Request, exc: StarletteHTTPEx
         "Please try again, or head back to the homepage."
     )
     return templates.TemplateResponse(
-        "error.html",
-        {"request": request, "status_code": exc.status_code, "title": title, "detail": detail},
-        status_code=exc.status_code,
+           request,
+           "error.html",
+           {"status_code": exc.status_code, "title": title, "detail": detail},
+           status_code=exc.status_code,
     )
 
 
