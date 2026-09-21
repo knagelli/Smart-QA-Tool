@@ -242,8 +242,13 @@ async def _security_headers(request: Request, call_next):
     # is a low-severity, deliberate tradeoff, not an oversight.
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-        "font-src 'self' https://fonts.gstatic.com; "
+        # Fraunces/Inter are self-hosted under /static/fonts/ as of
+        # 2026-09-21 (see the Client Hub font-inconsistency fix) - no
+        # requests to Google's font CDN are made anymore, so the
+        # fonts.googleapis.com/fonts.gstatic.com allowances below were
+        # stale and are removed rather than left in as unused surface.
+        "style-src 'self' 'unsafe-inline'; "
+        "font-src 'self'; "
         "img-src 'self' data:; "
         # plausible.io added for the cookieless analytics script in
         # _footer.html - script-src loads it, connect-src lets it send its
