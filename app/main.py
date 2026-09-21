@@ -755,7 +755,7 @@ def _sweep_completed_runs():
 # or time-limited, and must never appear in a sitemap. When a new static,
 # publicly-crawlable page is added to the site, add its path here too.
 SITE_BASE_URL = "https://req2qa.com"
-PUBLIC_PAGE_PATHS = ["/", "/about", "/security", "/privacy", "/terms", "/trial-signup", "/import-tests"]
+PUBLIC_PAGE_PATHS = ["/", "/about", "/security", "/privacy", "/terms", "/trial-signup", "/import-tests", "/faq", "/roi-calculator", "/see-it-in-action"]
 
 
 def _canonical_url(path: str) -> str:
@@ -808,6 +808,28 @@ async def security_page(request: Request):
 @app.get("/about", response_class=HTMLResponse)
 async def about_page(request: Request):
     return templates.TemplateResponse(request, "about.html", {"canonical_url": _canonical_url("/about")})
+
+
+# Moved off the homepage 2026-09-21 (see council-review-homepage-content-
+# audit-2026-09-21.md) - full content unchanged, just relocated to its own
+# page so the homepage stays a fast gist rather than a 100-section page.
+@app.get("/faq", response_class=HTMLResponse)
+async def faq_page(request: Request):
+    return templates.TemplateResponse(request, "faq.html", {"canonical_url": _canonical_url("/faq")})
+
+
+@app.get("/roi-calculator", response_class=HTMLResponse)
+async def roi_calculator_page(request: Request):
+    return templates.TemplateResponse(request, "roi_calculator.html", {"canonical_url": _canonical_url("/roi-calculator")})
+
+
+# The real "See it in action" proof artefact (genuine req2qa run against
+# OrangeHRM's public demo) - see council-review-homepage-proof-artefact-
+# orangehrm-2026-09-21.md and homepage-proof-artefact-draft-v2-2026-09-21.md
+# for the full review/disclaimer-wording rationale behind this page's content.
+@app.get("/see-it-in-action", response_class=HTMLResponse)
+async def see_it_in_action_page(request: Request):
+    return templates.TemplateResponse(request, "see_it_in_action.html", {"canonical_url": _canonical_url("/see-it-in-action")})
 
 
 # --------------------------------------------------------------------------
