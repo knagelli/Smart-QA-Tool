@@ -19,6 +19,59 @@
    short of WCAG AA contrast (4.5:1) against --bg at the small sizes it's
    used at (11.5-13px hint/footnote text). See council-review-site-and-
    retention.md. */
+/* Self-hosted variable fonts (2026-09-21 - see council-review on the
+   Client Hub "font looks inconsistent" report). Previously loaded from
+   Google Fonts with display=swap, which meant: browser paints the
+   fallback font first, downloads the real font from a third-party CDN,
+   then SWAPS mid-render once it arrives - and because different weights
+   can finish downloading at different moments, one part of the page can
+   visibly swap while another hasn't yet. That's the exact bug reported
+   (some text "looks like a different font" on an otherwise-normal page
+   load), not a CSS/design defect.
+
+   The fix removes the swap as a possible EVENT, not just makes it faster:
+   - Self-hosted (same origin as the page itself) means the font file
+     downloads in parallel with the page's own CSS/JS over the same
+     connection - no separate DNS/TLS handshake to a third-party host,
+     so it's essentially always ready before first paint.
+   - font-display:optional (not swap) means the browser gives the font a
+     short window (order of 100ms) to be ready; if it's not, that page
+     render commits to the fallback font stack below and never swaps
+     later. So the only possible outcomes are "renders in Inter/Fraunces"
+     or "renders in Georgia/system-ui the whole time" - never a page that
+     changes fonts partway through, which is what looked broken.
+   - Single variable-font files (one file each covers weights 400-700)
+     rather than separate files per weight, so there's only one download
+     per family, not four - simplifying the "did every weight arrive"
+     question down to "did the one file arrive."
+   As a side effect, this also drops two external network calls
+   (fonts.googleapis.com, fonts.gstatic.com) per page load - consistent
+   with the site's existing privacy-forward positioning.
+
+   For any FUTURE "text looks like the wrong font" report, check in this
+   order before assuming a CSS bug: (1) browser devtools - select the
+   affected text and check its COMPUTED font-family, not the CSS rule,
+   since a rule can say the right font while the computed value is the
+   fallback because the font never loaded; (2) Network tab - is any font
+   request still pending/slow; (3) the @font-face rule's font-display
+   value - "swap" reproduces exactly this bug class, "optional"/self-
+   hosted (as used here) does not; (4) only after ruling those out, look
+   for an actual conflicting font-family rule in the CSS. */
+/* Note: style.css is served as a static file (not a Jinja template), so
+   these paths can't carry the ?v=asset_version cache-busting token the
+   way template-referenced assets do. That's fine here: font files are
+   expected to change rarely if ever, and style.css's OWN url already
+   carries ?v=asset_version on every template that links it - so any
+   future change to these font files can force a refetch simply by
+   renaming the file (e.g. Inter-variable.v2.woff2) alongside the source
+   change, the same manual-bump approach asset_version was built to avoid
+   for everything else, but rare enough here not to need it. */
+@font-face{font-family:'Inter';src:url('/static/fonts/Inter-variable.woff2') format('woff2-variations'),
+    url('/static/fonts/Inter-variable.woff2') format('woff2');
+  font-weight:400 700;font-style:normal;font-display:optional}
+@font-face{font-family:'Fraunces';src:url('/static/fonts/Fraunces-variable.woff2') format('woff2-variations'),
+    url('/static/fonts/Fraunces-variable.woff2') format('woff2');
+  font-weight:400 700;font-style:normal;font-display:optional}
 html{-webkit-font-smoothing:antialiased}
 body{font-family:'Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
   background:var(--bg);color:var(--text);font-size:15px;line-height:1.6}
