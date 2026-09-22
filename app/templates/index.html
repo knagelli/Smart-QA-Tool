@@ -21,7 +21,6 @@
 {% if canonical_url %}<link rel="canonical" href="{{ canonical_url }}">{% endif %}
 </head>
 <body>
-<noscript><style>#chooser{display:none} .tab-panel{display:block !important}</style></noscript>
 {% include "_topbar.html" %}
 <div class="wrap wrap-wide">
   {% include "_client_hub_footnote.html" %}
@@ -60,7 +59,7 @@
     <div class="hero-cta-row">
       <a class="btn hero-cta-primary" href="/trial-signup">Start Free Trial</a>
       <a class="hero-cta-secondary" href="mailto:kalyan@req2qa.com?subject=Access%20request%20-%20Req2QA&amp;body=Company%3A%20%0AWhat%20you%20are%20testing%20(platform%2Fapp)%3A%20%0ARough%20timeline%3A%20%0A">Request a paid quote</a>
-      <a class="hero-cta-secondary" href="#chooser">Already have an access code? Jump to the tool &darr;</a>
+      <a class="hero-cta-secondary" href="/start">Already have an access code? Jump to the tool &darr;</a>
     </div>
 
     <!-- Trust strip: same two facts already stated in security.html/
@@ -198,226 +197,11 @@
     <p class="footnote"><a href="/faq">Read the full FAQ &rarr;</a></p>
   </section>
 
-  <div class="narrow-inner">
-  {% if error %}
-  <div class="alert">{{ error }}</div>
-  {% endif %}
-
-  <!-- Step 1: plain-language choice. Nothing else is shown until one is picked,
-       so a non-technical user who was just told "use the custom option" sees
-       only two clearly-worded options and nothing to get lost in. -->
-  <div id="chooser">
-    <p class="chooser-intro">First, which best describes the application being tested?</p>
-    <div class="choice-cards">
-      <button type="button" class="choice-card" data-choose="named">
-        <span class="choice-icon-badge">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18h10a4 4 0 0 0 .5-7.97A5.5 5.5 0 0 0 7.1 9.5 4 4 0 0 0 7 18z"/></svg>
-        </span>
-        <span class="choice-title">An off-the-shelf online system</span>
-        <span class="choice-sub">e.g. Salesforce, Humanforce, SuccessFactors, Workday</span>
-        <span class="choice-detail">Fastest option — just upload your requirements document. No diagrams needed.</span>
-      </button>
-      <button type="button" class="choice-card accent-purple" data-choose="custom">
-        <span class="choice-icon-badge">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-        </span>
-        <span class="choice-title">A custom app built for us</span>
-        <span class="choice-sub">An in-house or bespoke system, not an off-the-shelf product</span>
-        <span class="choice-detail">A fuller setup — you'll also provide a process-flow diagram and a short brief.</span>
-      </button>
-    </div>
-    <p class="chooser-help">Not sure which one? Check with whoever asked you to run this, or use the off-the-shelf option if the application has its own public website you log into.</p>
+  <div class="cta-band" style="text-align:center;margin-top:8px">
+    <a class="btn hero-cta-primary" href="/start">Start Generation &rarr;</a>
     <p class="footnote">Already have your own test cases written and just want to run them? <a href="/import-tests">Import &amp; execute test cases &rarr;</a></p>
   </div>
-
-  <!-- Step 2a: off-the-shelf / named-platform form -->
-  <div class="tab-panel" id="tab-named" hidden>
-    <button type="button" class="back-link" data-back>&larr; Choose a different option</button>
-    <p class="mode-desc">
-      We check each requirement against what's known to work well on well-established platforms.
-    </p>
-    <form class="card form" id="analyze-form" action="/analyze" method="post" enctype="multipart/form-data">
-      <label>Access code
-        <input type="password" name="access_code" id="analyze-access-code" required placeholder="Provided by your account manager" value="{{ request.cookies.get('req2qa_client_session', '') }}">
-      </label>
-
-      <label>Application under test
-        <input type="text" name="application" required maxlength="100" placeholder="e.g. Salesforce Sales Cloud, Humanforce, SuccessFactors">
-      </label>
-
-      <label>Requirements document
-        <input type="file" name="requirements_file" required accept=".docx,.xlsx,.xlsm,.pdf,.txt,.csv">
-        <span class="hint">.docx, .xlsx/.xlsm, .pdf, .txt or .csv</span>
-      </label>
-
-      <label>Baseline / version label <span class="opt">(optional)</span>
-        <input type="text" name="baseline_version" maxlength="100" placeholder="e.g. v1, Sprint 4 UAT">
-        <span class="hint">Stamped onto this run's report so a later re-run is distinguishable.</span>
-      </label>
-
-      <label id="client-test-data-field">
-        Test data for custom workflows <span class="opt">(optional)</span>
-        <textarea name="client_test_data" rows="3" placeholder="employee: employee_id=E-0452, full_name=Test Offboardee, status=terminated"></textarea>
-        <span class="hint">
-          Some requirements describe a workflow around a data state we can't create ourselves in one run
-          &mdash; e.g. testing against an employee who has already resigned and been offboarded, rather than one
-          we can create fresh. If your requirements include a scenario like that, list a record we can use here
-          (one per line, as <code>type: field=value, field=value</code>) so that scenario runs instead of being
-          skipped. <strong>Please use anonymized/placeholder values, never a real person's actual details</strong>
-          &mdash; we only need something the right shape and status, not the genuine record.
-        </span>
-      </label>
-      <script>
-        // Free-trial access codes are always "TRIAL-..." (see
-        // app/trial_signups.py's create_signup) - trial generation can never
-        // reach live execution (_check_access_no_trial in main.py rejects
-        // trial codes outright), so this field is functionally inert for a
-        // trial run. Hiding it is a presentation choice only (a founder call
-        // to keep the trial experience simpler), not a security control -
-        // the server independently discards this field for trial codes
-        // regardless of what's submitted (see /analyze in main.py), so
-        // nothing depends on this JS actually running or being bypassed.
-        (function () {
-          var codeInput = document.getElementById("analyze-access-code");
-          var field = document.getElementById("client-test-data-field");
-          var textarea = field ? field.querySelector("textarea") : null;
-          if (!codeInput || !field || !textarea) return;
-          function sync() {
-            var isTrial = codeInput.value.trim().toUpperCase().startsWith("TRIAL-");
-            field.hidden = isTrial;
-            if (isTrial) textarea.value = "";
-          }
-          codeInput.addEventListener("input", sync);
-          sync();
-        })();
-      </script>
-
-      <div id="process-coverage-field" class="feature-panel">
-        <div class="feature-panel-hdr">
-          <span class="feature-icon-badge">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>
-          </span>
-          <h3>Process Coverage Insights <span class="mode-pill accent-purple">BETA &bull; optional</span></h3>
-        </div>
-        <p class="hint" style="margin-top:0">
-          Requirement traceability tells you whether every requirement has a test case. This goes a step
-          further: it checks whether every real step in your actual process is exercised by a test case
-          &mdash; including steps that don't map cleanly to any single requirement. This is one input among
-          many and needs your review; it isn't a substitute for your own QA judgment.
-        </p>
-
-        <label>Process diagram <span class="opt">(optional)</span>
-          <input type="file" name="process_diagram_file" accept=".png,.jpg,.jpeg,.webp,.pdf">
-          <span class="hint">Visio/draw.io/BPMN export or a clear photo/PDF of your process flow.</span>
-        </label>
-
-        <label>Or describe your process in words <span class="opt">(optional)</span>
-          <textarea name="process_description" rows="3" placeholder="e.g. Employee submits leave request -> manager approves or rejects -> payroll is notified -> ..."></textarea>
-          <span class="hint">Use this if you don't have a diagram handy. Skip both fields if you only want requirement traceability.</span>
-        </label>
-
-        <label id="process-frame-label">Does this show your <strong>current</strong> or <strong>target</strong> process? <span class="opt">(required if you provided a diagram or description above)</span>
-          <span class="radio-row">
-            <label class="radio-inline"><input type="radio" name="process_frame" value="current"> Current (as-is)</label>
-            <label class="radio-inline"><input type="radio" name="process_frame" value="target"> Target (to-be)</label>
-          </span>
-          <span class="hint">This matters: for a target/to-be process, a step with no test coverage may just mean that part isn't built yet, not a testing gap.</span>
-        </label>
-      </div>
-      <script>
-        // Process Coverage Insights is paid-tier only, same trial-exclusion
-        // pattern as the client_test_data field above - the server
-        // independently ignores these fields for trial access codes
-        // regardless of what's submitted, so hiding here is presentation
-        // only, not a security control.
-        (function () {
-          var codeInput = document.getElementById("analyze-access-code");
-          var field = document.getElementById("process-coverage-field");
-          if (!codeInput || !field) return;
-          function sync() {
-            var isTrial = codeInput.value.trim().toUpperCase().startsWith("TRIAL-");
-            field.hidden = isTrial;
-            if (isTrial) {
-              var fileInput = field.querySelector('input[type=file]');
-              var textarea = field.querySelector('textarea');
-              var radios = field.querySelectorAll('input[type=radio]');
-              if (fileInput) fileInput.value = "";
-              if (textarea) textarea.value = "";
-              radios.forEach(function (r) { r.checked = false; });
-            }
-          }
-          codeInput.addEventListener("input", sync);
-          sync();
-        })();
-      </script>
-
-      <label>Your name or initials <span class="opt">(optional)</span>
-        <input type="text" name="initials" maxlength="40" placeholder="e.g. JD">
-        <span class="hint">Lets you filter to just your own runs later in <a href="/history">Run History</a> if your team shares one access code.</span>
-      </label>
-
-      <button type="submit">Run Validation &amp; Generate Test Scenarios</button>
-    </form>
-    <p class="footnote">Processing usually takes 20&ndash;60 seconds depending on document size.</p>
-    <p class="privacy-note">Your uploaded files are processed securely and are not stored — only the resulting report is kept, for 7 days, accessible via your secure link.</p>
-  </div>
-
-  <!-- Step 2b: custom application form -->
-  <div class="tab-panel" id="tab-custom" hidden>
-    <button type="button" class="back-link" data-back>&larr; Choose a different option</button>
-    <p class="mode-desc">
-      Since this app is custom-built, we read your process flow and brief to understand it
-      before generating anything. You'll review the extracted flow before test cases are
-      created. Web apps only (not native mobile or desktop apps).
-    </p>
-    <form class="card form" action="/analyze-custom" method="post" enctype="multipart/form-data">
-      <label>Access code
-        <input type="password" name="access_code" required placeholder="Provided by your account manager" value="{{ request.cookies.get('req2qa_client_session', '') }}">
-      </label>
-
-      <label>Application name
-        <input type="text" name="application" required maxlength="100" placeholder="e.g. Acme Internal Claims Portal">
-      </label>
-
-      <label>Project brief
-        <input type="file" name="brief_file" required accept=".docx,.xlsx,.xlsm,.pdf,.txt,.csv">
-        <span class="hint">Short context document — what the app does, who uses it.</span>
-      </label>
-
-      <label>Future-state process-flow diagram(s)
-        <input type="file" name="diagram_files" required multiple accept=".png,.jpg,.jpeg,.webp,.pdf">
-        <span class="hint">Visio/draw.io/BPMN export or a clear photo, as image(s) or PDF. You can select multiple pages/files.</span>
-      </label>
-
-      <label>Approved requirements document
-        <input type="file" name="requirements_file" required accept=".docx,.xlsx,.xlsm,.pdf,.txt,.csv">
-        <span class="hint">Already signed off — this run checks consistency/testability, not appropriateness.</span>
-      </label>
-
-      <label>Known element selectors / test-IDs <span class="opt">(optional)</span>
-        <textarea name="element_hints" rows="3" placeholder="e.g. #login-submit, [data-testid=approve-btn] on the Approval screen"></textarea>
-        <span class="hint">Improves execution reliability on critical screens if your developers have these. Never required.</span>
-      </label>
-
-      <label>Baseline / version label <span class="opt">(optional)</span>
-        <input type="text" name="baseline_version" maxlength="100" placeholder="e.g. v1, Sprint 4 UAT">
-        <span class="hint">Stamped onto this run's report so a later re-run against an updated flow is distinguishable.</span>
-      </label>
-
-      <label>Your name or initials <span class="opt">(optional)</span>
-        <input type="text" name="initials" maxlength="40" placeholder="e.g. JD">
-        <span class="hint">Lets you filter to just your own runs later in <a href="/history">Run History</a> if your team shares one access code.</span>
-      </label>
-
-      <button type="submit">Parse Flow &amp; Review</button>
-    </form>
-    <p class="footnote">Next step: you'll confirm or correct the extracted process flow before any test cases are generated.</p>
-    <p class="privacy-note">Your uploaded files are processed securely and are not stored — only the resulting report is kept, for 7 days, accessible via your secure link.</p>
-  </div>
-  </div>
 </div>
-<div id="initial-tab" data-active-tab="{{ active_tab or '' }}" hidden></div>
-<script src="/static/chooser.js"></script>
 {% include "_footer.html" %}
 </body>
 </html>
