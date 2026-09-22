@@ -16,6 +16,37 @@ from . import ai_client
 # ai_client.py for why this indirection exists).
 MODEL = os.environ.get("QA_MODEL", "claude-sonnet-4-6")
 
+# Output cap for every structured-JSON call in this file (all five below).
+# Was 8000 - too low for a genuinely detailed requirements/test-case document:
+# a 2026-09-22 run against a real ServiceNow Incident-form requirements doc
+# (7 well-developed sections) truncated Claude's JSON response mid-string
+# every single time at ~27,000 characters, well past the true midpoint of
+# the intended output, which _parse_json_response cannot recover from (the
+# cut happens inside a string value, not just a missing closing brace) -
+# see claude/servicenow-max-tokens-truncation-fix-2026-09-22.md for the
+# incident, the reproduced traceback (ref=c2ab8f47 and others), and the
+# council review that set this value.
+#
+# Set to 64000 (interim, pending measurement) rather than a scientifically
+# derived number: the server logs only capture the first 2000 characters of
+# each failed response (see _parse_json_response's error message below), so
+# the TRUE output length this document needed was never actually observed -
+# only that it exceeded 8000 tokens. 64000 is comfortably within Claude
+# Sonnet 4.6's output range and removes the immediate failure, but is still
+# a margin-of-safety choice, not a measured one. scripts/measure_qa_tokens.py
+# (added alongside this change) makes one real API call against a real
+# requirements document with a very high ceiling and reads back
+# resp.usage.output_tokens - the actual ground truth for what a given
+# document needs - so this constant can be replaced with a properly
+# measured value (plus a deliberate safety multiplier) once that's run.
+# Raising this alone has no billing impact for any request that already
+# completed under the old cap - Anthropic bills actual tokens generated, not
+# the max_tokens ceiling itself - it only lets a request that was already
+# trying to produce more output finish doing so instead of failing outright
+# (and today, a truncated request already paid for the ~8000 output tokens
+# it wasted).
+QA_MAX_OUTPUT_TOKENS = 64000
+
 SYSTEM_PROMPT = (
     "You are an expert QA Analyst and Requirements Traceability specialist. "
     "You validate whether requirements make sense for a named target application, "
@@ -196,7 +227,7 @@ def run_qa_analysis(application: str, requirements_text: str, api_key: str, max_
 
     resp = client.messages.create(
         model=ai_client.get_model_id(),
-        max_tokens=8000,
+        max_tokens=QA_MAX_OUTPUT_TOKENS,
         temperature=0,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": prompt}],
@@ -355,7 +386,7 @@ def run_qa_analysis_custom(application: str, brief_text: str, flow: dict, requir
 
     resp = client.messages.create(
         model=ai_client.get_model_id(),
-        max_tokens=8000,
+        max_tokens=QA_MAX_OUTPUT_TOKENS,
         temperature=0,
         system=CUSTOM_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": prompt}],
@@ -438,7 +469,7 @@ def structure_existing_test_cases(application: str, raw_text: str, api_key: str)
 
     resp = client.messages.create(
         model=ai_client.get_model_id(),
-        max_tokens=8000,
+        max_tokens=QA_MAX_OUTPUT_TOKENS,
         temperature=0,
         system=IMPORT_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": prompt}],
@@ -500,7 +531,7 @@ def match_requirements_to_test_cases(application: str, requirements_text: str, t
 
     resp = client.messages.create(
         model=ai_client.get_model_id(),
-        max_tokens=8000,
+        max_tokens=QA_MAX_OUTPUT_TOKENS,
         temperature=0,
         system=TRACEABILITY_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": prompt}],
@@ -620,7 +651,7 @@ def analyze_requirements_impact(
 
     resp = client.messages.create(
         model=ai_client.get_model_id(),
-        max_tokens=8000,
+        max_tokens=QA_MAX_OUTPUT_TOKENS,
         temperature=0,
         system=IMPACT_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": prompt}],
