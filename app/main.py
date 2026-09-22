@@ -3047,16 +3047,30 @@ def _resolve_client_session(access_code: str):
     """Side-effect-free validity check for a client-hub session cookie's
     access code - no rate-limit bucket touched, no failed-attempt
     recorded (see the module note above for why that matters here).
-    Returns (client_name, service_type), or (None, None) if the code is
-    no longer valid or has no entitlement configured."""
+    Returns (client_name, service_type, is_trial), or (None, None, False)
+    if the code is no longer valid or has no entitlement configured.
+
+    2026-09-22 - extended for trial codes (see the "restrictive Client Hub
+    view for trial users" council review): an UNUSED trial code resolves to
+    a generation-only, is_trial=True session, same as a fresh trial lookup
+    in client_hub_lookup below - so the session cookie behaves identically
+    for trial and paid clients (pre-fill, back-to-hub link, etc.). A trial
+    code that's since been used or is mid-reservation resolves to nothing
+    (fails closed, same as any other invalid code) rather than showing a
+    stale trial view that no longer works if clicked through."""
+    trial = trial_signups.lookup_trial(access_code)
+    if trial is not None:
+        if trial["status"] == "unused":
+            return f"trial:{trial['company']}", "generation", True
+        return None, None, False
     codes = _load_access_codes()
     client_name = _lookup_client(codes, access_code)
     if not client_name:
-        return None, None
+        return None, None, False
     service_type = client_quotas.get_service_type(access_code)
     if service_type is None:
-        return None, None
-    return client_name, service_type
+        return None, None, False
+    return client_name, service_type, False
 
 
 def _client_session_prefill(request: Request) -> str:
@@ -3084,10 +3098,11 @@ async def client_hub_form(request: Request, fresh: str = ""):
 
     cookie_code = request.cookies.get(CLIENT_SESSION_COOKIE)
     if cookie_code:
-        client_name, service_type = _resolve_client_session(cookie_code)
+        client_name, service_type, is_trial = _resolve_client_session(cookie_code)
         if service_type is not None:
             return templates.TemplateResponse(request, "client_hub.html",
-                {"error": None, "access_code": cookie_code, "service_type": service_type, "hide_trial_cta": True},
+                {"error": None, "access_code": cookie_code, "service_type": service_type,
+                 "is_trial": is_trial, "hide_trial_cta": True},
             )
         # Cookie points at a code that's no longer valid/configured -
         # fall through to the blank form, and drop the stale cookie so
@@ -3108,7 +3123,45 @@ async def client_hub_lookup(request: Request, access_code: str = Form(...)):
     code is entitled to - the same client_quotas.get_service_type this
     session's other enforcement points check, so what's shown here always
     matches what's actually allowed if clicked through, rather than being a
-    separate, driftable copy of that logic."""
+    separate, driftable copy of that logic.
+
+    2026-09-22 - a trial code no longer gets an outright rejection here
+    (see the "restrictive Client Hub view for trial users" council review).
+    It gets its own generation-only view instead: Generate Test Cases is
+    live, everything else (execution, run history, impact analysis, saved
+    test cases) is shown locked with a paid-plan upsell note rather than
+    hidden or left to fail elsewhere with a confusing error. This is
+    checked BEFORE the paid _check_access_no_trial path below, which still
+    exists specifically to reject trial codes for every OTHER caller
+    (import-tests, execute, requirement-history, test-case-history) -
+    those deliberately stay generation-only exclusions; only Client Hub's
+    own landing view changes here."""
+    trial = trial_signups.lookup_trial(access_code)
+    if trial is not None:
+        if trial["status"] == "used":
+            return templates.TemplateResponse(request, "client_hub.html", {
+                "error": "This free trial code has already been used. Please contact kalyan@req2qa.com to continue with a paid engagement.",
+                "access_code": None, "service_type": None,
+            }, status_code=403)
+        if trial["status"] == "reserved":
+            return templates.TemplateResponse(request, "client_hub.html", {
+                "error": ("This trial code is currently in use, or a previous attempt didn't finish cleanly. "
+                          "It will free up automatically within 30 minutes - or email kalyan@req2qa.com "
+                          "for an immediate fix."),
+                "access_code": None, "service_type": None,
+            }, status_code=429)
+        # Unused trial code - restrictive trial view. The session cookie is
+        # set here too (same as the paid path below) so pre-fill and the
+        # "Back to Client Hub" link behave identically for trial and paid
+        # visitors - _resolve_client_session above knows how to re-resolve
+        # a trial code on a later page load.
+        resp = templates.TemplateResponse(request, "client_hub.html", {
+            "error": None, "access_code": access_code, "service_type": "generation",
+            "is_trial": True, "hide_trial_cta": True,
+        })
+        resp.set_cookie(CLIENT_SESSION_COOKIE, access_code, httponly=True, secure=True, samesite="strict")
+        return resp
+
     try:
         _check_access_no_trial(request, access_code)
     except HTTPException as e:
