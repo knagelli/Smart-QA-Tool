@@ -2996,8 +2996,92 @@ async def pricing_page(request: Request):
     return templates.TemplateResponse(request, "pricing.html", {"canonical_url": _canonical_url("/pricing"), "updated_date": _TRUST_PAGE_UPDATED})
 
 
+
+# --------------------------------------------------------------------------
+# Client-hub session cookie (2026-09-22 - see council-review on "no way
+# back to Client Hub" / access-code re-entry). Lets a browser that has
+# already entered a valid access code on /client-hub (a) return to the
+# hub dashboard directly from anywhere via a "Back to Client Hub" link
+# (see _client_hub_footnote.html, included on every downstream page) and
+# (b) skip retyping the code on the generation/import entry forms.
+#
+# Security posture, deliberately narrow:
+# - httponly + secure + samesite=strict: never readable by JS, never sent
+#   cross-site, HTTPS-only.
+# - No explicit max_age/expires - a SESSION cookie, gone when the browser
+#   closes. No "remember me", nothing persisted beyond the current visit.
+# - NEVER used to authorize anything. It only pre-fills a form field and
+#   decides whether to show a link/skip the entry form. Every actual
+#   action (generate, execute, view history) re-validates the access code
+#   exactly as if it had been freshly typed, through the same
+#   client_quotas checks as always - a tampered or stale cookie value
+#   changes nothing about what it's allowed to do, only what's
+#   pre-filled/shown.
+# - Resolving it (checking whether the code is still valid, for the
+#   dashboard auto-open) deliberately uses _resolve_client_session below,
+#   NOT _check_access_no_trial - the latter consumes the same per-code
+#   analysis rate-limit bucket (ANALYSIS_RATE_MAX=10 per 10 minutes) as an
+#   actual generation request, so calling it on every passive page load
+#   driven by this cookie (e.g. clicking "Client Hub" a few times) could
+#   lock a client out of generating a report simply for navigating.
+# --------------------------------------------------------------------------
+CLIENT_SESSION_COOKIE = "req2qa_client_session"
+
+
+def _resolve_client_session(access_code: str):
+    """Side-effect-free validity check for a client-hub session cookie's
+    access code - no rate-limit bucket touched, no failed-attempt
+    recorded (see the module note above for why that matters here).
+    Returns (client_name, service_type), or (None, None) if the code is
+    no longer valid or has no entitlement configured."""
+    codes = _load_access_codes()
+    client_name = _lookup_client(codes, access_code)
+    if not client_name:
+        return None, None
+    service_type = client_quotas.get_service_type(access_code)
+    if service_type is None:
+        return None, None
+    return client_name, service_type
+
+
+def _client_session_prefill(request: Request) -> str:
+    """Pure cookie read for pre-filling an access-code form field - no
+    validation, no lookups, no side effects. If the code is stale, the
+    field is simply pre-filled with something that fails validation on
+    submit exactly like a mistyped code would today; nothing new to get
+    wrong by pre-filling an unverified value here."""
+    return request.cookies.get(CLIENT_SESSION_COOKIE, "")
+
+
 @app.get("/client-hub", response_class=HTMLResponse)
-async def client_hub_form(request: Request):
+async def client_hub_form(request: Request, fresh: str = ""):
+    # ?fresh=1 is the explicit "use a different access code" / sign-out
+    # link on the dashboard view (client_hub.html) - always shows the
+    # blank entry form and drops the cookie, regardless of whether it's
+    # still valid. Without this, someone on a shared computer would have
+    # no way to hand the tool back to a blank state without clearing
+    # cookies manually.
+    if fresh:
+        resp = templates.TemplateResponse(request, "client_hub.html",
+            {"error": None, "access_code": None, "service_type": None})
+        resp.delete_cookie(CLIENT_SESSION_COOKIE)
+        return resp
+
+    cookie_code = request.cookies.get(CLIENT_SESSION_COOKIE)
+    if cookie_code:
+        client_name, service_type = _resolve_client_session(cookie_code)
+        if service_type is not None:
+            return templates.TemplateResponse(request, "client_hub.html",
+                {"error": None, "access_code": cookie_code, "service_type": service_type, "hide_trial_cta": True},
+            )
+        # Cookie points at a code that's no longer valid/configured -
+        # fall through to the blank form, and drop the stale cookie so
+        # this check isn't repeated on every subsequent page load.
+        resp = templates.TemplateResponse(request, "client_hub.html",
+            {"error": None, "access_code": None, "service_type": None})
+        resp.delete_cookie(CLIENT_SESSION_COOKIE)
+        return resp
+
     return templates.TemplateResponse(request, "client_hub.html", {"error": None, "access_code": None, "service_type": None})
 
 
@@ -3030,9 +3114,11 @@ async def client_hub_lookup(request: Request, access_code: str = Form(...)):
                      "so no actions are available on it. Please contact kalyan@req2qa.com.",
             "access_code": None, "service_type": None,
         })
-    return templates.TemplateResponse(request, "client_hub.html",
+    resp = templates.TemplateResponse(request, "client_hub.html",
         {"error": None, "access_code": access_code, "service_type": service_type, "hide_trial_cta": True},
     )
+    resp.set_cookie(CLIENT_SESSION_COOKIE, access_code, httponly=True, secure=True, samesite="strict")
+    return resp
 
 
 @app.get("/healthz")
