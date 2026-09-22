@@ -5,10 +5,13 @@ asks for validation + test scenario generation in one structured pass,
 and parses the response into the JSON shape report_builder.py expects.
 """
 import json
+import logging
 import os
 import re
 
 from . import ai_client
+
+logger = logging.getLogger(__name__)
 
 # MODEL is kept only for any external reference; call sites now use
 # ai_client.get_model_id() so the model ID stays correct whether this is
@@ -231,6 +234,17 @@ def run_qa_analysis(application: str, requirements_text: str, api_key: str, max_
         temperature=0,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": prompt}],
+    )
+    # Logged unconditionally (success or eventual parse failure below) so the
+    # real output_tokens figure for a given document is always visible in
+    # `journalctl -u req2qa`, the same way the failure traceback already is -
+    # added 2026-09-22 alongside the max_tokens fix so future sizing of
+    # QA_MAX_OUTPUT_TOKENS can be based on a measured number instead of a
+    # guess. A stop_reason of "max_tokens" here means this ceiling was
+    # itself hit - the true requirement for that document is higher still.
+    logger.info(
+        "run_qa_analysis usage: output_tokens=%s input_tokens=%s stop_reason=%s max_tokens_cap=%s",
+        resp.usage.output_tokens, resp.usage.input_tokens, resp.stop_reason, QA_MAX_OUTPUT_TOKENS,
     )
 
     raw_text = "".join(block.text for block in resp.content if block.type == "text")
