@@ -823,7 +823,7 @@ def _sweep_completed_runs():
 # or time-limited, and must never appear in a sitemap. When a new static,
 # publicly-crawlable page is added to the site, add its path here too.
 SITE_BASE_URL = "https://req2qa.com"
-PUBLIC_PAGE_PATHS = ["/", "/about", "/security", "/privacy", "/terms", "/trial-signup", "/import-tests", "/faq", "/roi-calculator", "/see-it-in-action", "/pricing"]
+PUBLIC_PAGE_PATHS = ["/", "/start", "/about", "/security", "/privacy", "/terms", "/trial-signup", "/import-tests", "/faq", "/roi-calculator", "/see-it-in-action", "/pricing"]
 
 
 def _canonical_url(path: str) -> str:
@@ -837,6 +837,21 @@ def _canonical_url(path: str) -> str:
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     return templates.TemplateResponse(request, "index.html", {"error": None, "canonical_url": _canonical_url("/")})
+
+
+# --------------------------------------------------------------------------
+# /start (2026-09-22 - independent-page migration, see the "should the tool
+# live on its own page" council review) - the chooser + both entry forms,
+# split out of index.html so the marketing homepage and the tool are two
+# separately-evolvable pages. GET here is a fresh, no-error entry; the many
+# error-re-render call sites inside /analyze and /analyze-custom below
+# render this same template directly (with "error" and, for the custom
+# form, "active_tab" set) rather than redirecting, so a validation failure
+# reopens the right tab with the message shown, not a fresh blank form.
+# --------------------------------------------------------------------------
+@app.get("/start", response_class=HTMLResponse)
+async def start_form(request: Request):
+    return templates.TemplateResponse(request, "start.html", {"error": None, "canonical_url": _canonical_url("/start")})
 
 
 @app.get("/sitemap.xml", response_class=Response)
@@ -1000,7 +1015,7 @@ async def analyze(
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         logger.error("ANTHROPIC_API_KEY is not configured.")
-        return templates.TemplateResponse(request, "index.html",
+        return templates.TemplateResponse(request, "start.html",
             {"error": "This service is not yet available. Please contact the operator."},
             status_code=500,
         )
@@ -1008,30 +1023,30 @@ async def analyze(
     try:
         client_name, trial = _check_access_for_generation(request, access_code)
     except HTTPException as e:
-        return templates.TemplateResponse(request, "index.html", {"error": e.detail}, status_code=e.status_code
+        return templates.TemplateResponse(request, "start.html", {"error": e.detail}, status_code=e.status_code
         )
 
     if trial is None:
         allowed, block_reason = client_quotas.check_service_entitlement(access_code, "generation")
         if not allowed:
-            return templates.TemplateResponse(request, "index.html", {"error": block_reason}, status_code=403)
+            return templates.TemplateResponse(request, "start.html", {"error": block_reason}, status_code=403)
 
     for field_name, field_value in (("application", application), ("baseline_version", baseline_version)):
         length_error = _check_field_length(field_value, field_name)
         if length_error:
-            return templates.TemplateResponse(request, "index.html", {"error": length_error}, status_code=400)
+            return templates.TemplateResponse(request, "start.html", {"error": length_error}, status_code=400)
 
     raw_bytes = await requirements_file.read()
     if not raw_bytes:
-        return templates.TemplateResponse(request, "index.html", {"error": "The uploaded file is empty."}, status_code=400
+        return templates.TemplateResponse(request, "start.html", {"error": "The uploaded file is empty."}, status_code=400
         )
     if len(raw_bytes) > MAX_DOC_BYTES:
-        return templates.TemplateResponse(request, "index.html",
+        return templates.TemplateResponse(request, "start.html",
             {"error": f"That file is too large (max {MAX_DOC_BYTES // (1024*1024)} MB)."},
             status_code=400,
         )
     if not _validate_upload(requirements_file.filename, raw_bytes):
-        return templates.TemplateResponse(request, "index.html",
+        return templates.TemplateResponse(request, "start.html",
             {"error": "That file doesn't look like a valid document of its type. Please re-export and try again."},
             status_code=400,
         )
@@ -1040,18 +1055,18 @@ async def analyze(
         req_text = extract_text(requirements_file.filename, raw_bytes)
     except Exception as e:
         ref = _log_and_ref(e, "extract_text failed in /analyze")
-        return templates.TemplateResponse(request, "index.html", {"error": GENERIC_ERROR_MESSAGE.format(ref=ref)}, status_code=400
+        return templates.TemplateResponse(request, "start.html", {"error": GENERIC_ERROR_MESSAGE.format(ref=ref)}, status_code=400
         )
 
     if not req_text.strip():
-        return templates.TemplateResponse(request, "index.html",
+        return templates.TemplateResponse(request, "start.html",
             {"error": "No text could be extracted from that file."},
             status_code=400,
         )
 
     if trial is not None:
         if not trial_signups.check_word_count(req_text):
-            return templates.TemplateResponse(request, "index.html",
+            return templates.TemplateResponse(request, "start.html",
                 {"error": (
                     "This document looks larger than what the free trial supports "
                     f"(up to {trial_signups.TRIAL_MAX_REQ_WORDS} words / roughly 10 test cases). "
@@ -1061,7 +1076,7 @@ async def analyze(
             )
         reserved, reserve_msg = trial_signups.reserve_trial(access_code)
         if not reserved:
-            return templates.TemplateResponse(request, "index.html",
+            return templates.TemplateResponse(request, "start.html",
                 {"error": reserve_msg or "This trial code is no longer available."},
                 status_code=409,
             )
@@ -1071,7 +1086,7 @@ async def analyze(
         # Anthropic API so a blocked attempt never spends a token.
         allowed, block_reason = client_quotas.check_can_generate(access_code)
         if not allowed:
-            return templates.TemplateResponse(request, "index.html", {"error": block_reason}, status_code=429
+            return templates.TemplateResponse(request, "start.html", {"error": block_reason}, status_code=429
             )
 
     # Process Coverage Insights (Beta) - council-reviewed and copy-locked,
@@ -1088,7 +1103,7 @@ async def analyze(
         if diagram_present or description_text:
             frame = process_frame.strip().lower()
             if frame not in ("current", "target"):
-                return templates.TemplateResponse(request, "index.html",
+                return templates.TemplateResponse(request, "start.html",
                     {"error": "Please choose whether your process diagram/description shows your current or target process."},
                     status_code=400,
                 )
@@ -1128,7 +1143,7 @@ async def analyze(
         rl.finish("fail", {"correlation_ref": ref, "error": str(e)})
         if trial is not None:
             trial_signups.release_trial(access_code)
-        return templates.TemplateResponse(request, "index.html", {"error": GENERIC_ERROR_MESSAGE.format(ref=ref)}, status_code=502
+        return templates.TemplateResponse(request, "start.html", {"error": GENERIC_ERROR_MESSAGE.format(ref=ref)}, status_code=502
         )
 
     if trial is not None and len(data.get("test_scenarios", [])) > trial_signups.TRIAL_MAX_TEST_CASES:
@@ -1474,7 +1489,7 @@ async def analyze_custom(
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         logger.error("ANTHROPIC_API_KEY is not configured.")
-        return templates.TemplateResponse(request, "index.html",
+        return templates.TemplateResponse(request, "start.html",
             {"error": "This service is not yet available. Please contact the operator.", "active_tab": "custom"},
             status_code=500,
         )
@@ -1482,7 +1497,7 @@ async def analyze_custom(
     try:
         client_name, trial = _check_access_for_generation(request, access_code)
     except HTTPException as e:
-        return templates.TemplateResponse(request, "index.html", {"error": e.detail, "active_tab": "custom"}, status_code=e.status_code
+        return templates.TemplateResponse(request, "start.html", {"error": e.detail, "active_tab": "custom"}, status_code=e.status_code
         )
     if trial is not None:
         # Custom Application Mode's cost is fundamentally hard to bound
@@ -1492,7 +1507,7 @@ async def analyze_custom(
         # meaningfully cap it. Rather than ship a weak, easily-bypassed
         # heuristic, the free trial is scoped to Option A (text requirements
         # only) - custom-application testing is a paid-tier feature.
-        return templates.TemplateResponse(request, "index.html",
+        return templates.TemplateResponse(request, "start.html",
             {
                 "error": (
                     "Free trials cover standard requirements-document generation only. "
@@ -1506,10 +1521,10 @@ async def analyze_custom(
 
     allowed, block_reason = client_quotas.check_service_entitlement(access_code, "generation")
     if not allowed:
-        return templates.TemplateResponse(request, "index.html", {"error": block_reason, "active_tab": "custom"}, status_code=403)
+        return templates.TemplateResponse(request, "start.html", {"error": block_reason, "active_tab": "custom"}, status_code=403)
 
     def err(msg, code=400):
-        return templates.TemplateResponse(request, "index.html", {"error": msg, "active_tab": "custom"}, status_code=code
+        return templates.TemplateResponse(request, "start.html", {"error": msg, "active_tab": "custom"}, status_code=code
         )
 
     for field_name, field_value in (("application", application), ("baseline_version", baseline_version)):
