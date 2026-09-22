@@ -13,7 +13,7 @@
           <a href="/import-tests"><span class="nav-drop-label">Import test cases</span><span class="nav-drop-desc">Bring your own suite for execution</span></a>
         </div>
       </details>
-      <a href="/pricing" class="nav-emphasis">Pricing</a>
+      <a href="/pricing"{% if request.url.path == '/pricing' %} class="nav-emphasis"{% endif %}>Pricing</a>
       <a href="/security">Security</a>
       <a href="/client-hub">Client Hub</a>
       <a href="/faq">FAQ</a>
