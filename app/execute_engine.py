@@ -121,6 +121,86 @@ _ELEMENT_INFO_JS = """
 """
 
 
+# IFRAMES: see the module-level note above INTERACTIVE_SELECTOR's shadow-DOM
+# history for the fuller story - see also
+# claude/servicenow-iframe-fix-2026-09-22.md. Short version: a real
+# ServiceNow PDI test run (2026-09-22) found the shadow-DOM fix below did not
+# help at all, because ServiceNow's "Polaris" navigation shell renders the
+# actual application (the Incident form, everything a test case needs)
+# inside a classic-UI <iframe>, not in the top-level document and not behind
+# a shadow root. Playwright's locator engine pierces OPEN shadow roots
+# automatically for a plain CSS selector (that's what the shadow-DOM fix
+# below relies on) but does NOT automatically reach into iframe content -
+# an iframe is a genuinely separate frame in Playwright's model, and has to
+# be walked explicitly. _visible_frames() below is that walk, shared by
+# every function in this file that previously only ever looked at `page`
+# directly (_snapshot_elements, _element_locator, _mask_critical_fields,
+# _unmask, and the wait_for_text tool handler further down) - a single
+# shared helper so all of them stay in lock-step the same way the
+# shadow-DOM fix kept _snapshot_elements/_element_locator in lock-step.
+# Cross-origin iframes are NOT a special case here - Playwright's Frame API
+# works the same regardless of origin (unlike raw in-page JavaScript, which
+# same-origin policy would block); no cross-origin workaround was needed.
+GLOBAL_REF_FRAME_MULTIPLIER = 1000  # see _resolve_ref's docstring
+
+
+def _visible_frames(page) -> list:
+    """Every frame worth searching for interactive elements: the main frame,
+    plus every child/nested frame that is currently visible (nonzero size,
+    not display:none) on the page. `page.frames` already returns nested
+    iframes flattened into one list (no manual recursion needed) in a
+    stable order - main frame first, then children in DOM order - and that
+    same order is what makes a ref computed here still resolve correctly
+    later in _resolve_ref, as long as the frame tree hasn't changed shape in
+    between (the same tolerance-for-staleness posture already used for
+    individual elements below, just extended to frames).
+
+    Deliberately no origin-based or URL-based filtering (e.g. skipping
+    "known ad network" domains) - that would contradict this file's own
+    stated design principle of staying generic and platform-agnostic, and
+    it's a maintenance trap. An invisible or empty frame (a tracking pixel,
+    a 0x0 iframe) naturally contributes zero elements once its own
+    selector count is checked, so no special-case exclusion is needed for
+    those either - the visibility check here is purely about not paying
+    the cost of asking a frame that can't possibly matter."""
+    frames = list(page.frames)
+    if not frames:
+        return []
+    result = [frames[0]]  # the main frame is always included, unconditionally
+    for frame in frames[1:]:
+        try:
+            el = frame.frame_element()
+            box = el.bounding_box()
+            if box and box["width"] > 0 and box["height"] > 0:
+                result.append(frame)
+        except Exception:
+            # A frame that's been detached/replaced between the `page.frames`
+            # read and this check (an SPA nav swapping an iframe's src, e.g.
+            # ServiceNow's Polaris shell) - skip it rather than aborting the
+            # whole walk over one frame.
+            continue
+    return result
+
+
+def _resolve_ref(page, ref: int):
+    """Turn a global ref (as handed back by _snapshot_elements/the agent)
+    into (frame, raw_index_within_that_frame). Refs stay plain integers -
+    no change to the tool schema the agent sees - by encoding the frame's
+    position in _visible_frames()'s list in the ref's high digits:
+    ref = frame_position * GLOBAL_REF_FRAME_MULTIPLIER + raw_index. 1000 is
+    comfortably above the existing per-frame raw enumeration cap (200, see
+    _snapshot_elements), so this can never collide. Raises IndexError if the
+    frame at that position no longer exists (the frame tree changed shape
+    since the ref was issued) - callers already wrap every tool call in a
+    broad try/except (see the main step loop) that turns this into a normal
+    "action failed" tool result the agent can react to with a fresh
+    snapshot, the same tolerance already relied on for a single stale
+    element disappearing."""
+    frames = _visible_frames(page)
+    frame_idx, raw_idx = divmod(ref, GLOBAL_REF_FRAME_MULTIPLIER)
+    return frames[frame_idx], raw_idx
+
+
 def _snapshot_elements(page) -> list:
     """Build a DOM/accessibility-tree-ish snapshot: every interactive
     element with a stable ref, its role, and its best-available label.
@@ -146,31 +226,67 @@ def _snapshot_elements(page) -> list:
     Web Components and many ServiceNow/Angular-Material-style widgets do)
     was invisible to the agent, not just hard to act on. Playwright's own
     locator engine pierces OPEN shadow roots transparently for a plain CSS
-    selector, so this now enumerates via `page.locator(INTERACTIVE_SELECTOR)`
+    selector, so this enumerates via `<frame>.locator(INTERACTIVE_SELECTOR)`
     instead of a raw DOM query - same selector list, but shadow-DOM-inclusive
-    - and `_element_locator` below indexes into the exact same locator, so
-    the two stay in lock-step. CLOSED shadow roots remain genuinely
+    - and `_element_locator`/`_resolve_ref` below index into the exact same
+    locator, so they stay in lock-step. CLOSED shadow roots remain genuinely
     unreachable (true of every browser-automation tool, not a req2qa gap) -
-    nothing here can or should try to defeat that encapsulation. Added
-    2026-09-21 after a code review flagged the raw-query gap; not yet
-    validated against a real Salesforce or ServiceNow org - see the
-    execution notes before claiming this "fixes" either platform outright."""
-    locator = page.locator(INTERACTIVE_SELECTOR)
-    try:
-        count = min(locator.count(), 200)
-    except Exception:
-        return []
+    nothing here can or should try to defeat that encapsulation.
+
+    IFRAMES: now walks every visible frame via _visible_frames(), not just
+    the top-level page - see the note above _visible_frames for why. A
+    global element budget of 200 (unchanged from the old single-frame cap)
+    is shared across all frames, main frame first, so the overwhelmingly
+    common single-frame case is completely unaffected (page.frames is just
+    [main_frame] and this behaves identically to before) and iframe content
+    only ever uses leftover budget rather than crowding out the main page.
+    An element sourced from a non-main frame gets a `frame_url` hint so the
+    agent's reasoning can tell it apart from the main page - added only for
+    those elements, so a normal single-frame app's elements are byte-for-
+    byte what they were before this change."""
+    frames = _visible_frames(page)
     elements = []
-    for i in range(count):
+    for frame_idx, frame in enumerate(frames):
+        budget = 200 - len(elements)
+        if budget <= 0:
+            break
         try:
-            data = locator.nth(i).evaluate(_ELEMENT_INFO_JS)
+            locator = frame.locator(INTERACTIVE_SELECTOR)
+            count = min(locator.count(), budget)
         except Exception:
-            # A node that disappeared/detached between count() and evaluate()
-            # (rare, but real on a dynamically re-rendering SPA) - skip it
-            # rather than aborting the whole snapshot over one stale ref.
+            # A frame that's gone/unreachable by the time we query it - skip
+            # it, same tolerance as a single stale element elsewhere here.
             continue
-        data["ref"] = i
-        elements.append(data)
+        for i in range(count):
+            try:
+                data = locator.nth(i).evaluate(_ELEMENT_INFO_JS)
+            except Exception:
+                # A node that disappeared/detached between count() and evaluate()
+                # (rare, but real on a dynamically re-rendering SPA) - skip it
+                # rather than aborting the whole snapshot over one stale ref.
+                continue
+            data["ref"] = frame_idx * GLOBAL_REF_FRAME_MULTIPLIER + i
+            if frame_idx != 0:
+                try:
+                    data["frame_url"] = frame.url[:200]
+                except Exception:
+                    pass
+            elements.append(data)
+    if len(frames) > 1:
+        # Observability, not functional - added 2026-09-22 alongside this
+        # fix so a FUTURE site with some frame topology this fix didn't
+        # anticipate fails with a visible diagnostic signal in the logs
+        # (how many frames, whether any of them actually contributed
+        # elements) instead of another silent, multi-day mystery
+        # investigation like the one that found this gap in the first
+        # place. See claude/servicenow-iframe-fix-2026-09-22.md.
+        try:
+            logger.info(
+                "snapshot: %d visible frame(s), %d element(s) total, %d from non-main frames",
+                len(frames), len(elements), sum(1 for e in elements if "frame_url" in e),
+            )
+        except Exception:
+            pass
     # A <input type="file"> is kept even when CSS-hidden (display:none /
     # zero-size) - a very common enterprise-UI pattern is a styled,
     # visible wrapper (a photo-picker area, a "Choose File" button)
@@ -186,15 +302,25 @@ def _snapshot_elements(page) -> list:
 def _snapshot_fingerprint(page, elements: list) -> tuple:
     """A cheap signature of 'what the agent can currently see and do',
     used only to detect a stall (the page genuinely not changing across
-    repeated snapshots) - not for anything functional."""
+    repeated snapshots) - not for anything functional. Still keyed off
+    page.url (the top-level URL) even post-iframe-fix: an iframe swapping
+    its internal content while the outer URL stays the same (exactly
+    ServiceNow's Polaris pattern) is still caught, because the elements
+    tuple itself changes when the iframe's content changes - the URL half
+    of this signature was never doing the real work of stall detection,
+    the element tuple was."""
     return (page.url, tuple((e["tag"], e["role"], e["label"]) for e in elements))
 
 
 def _element_locator(page, ref: int):
-    # Must use the exact same selector as _snapshot_elements (INTERACTIVE_SELECTOR)
-    # so a ref handed back by the agent indexes the same element both times -
-    # Playwright's locator pierces open shadow roots the same way in both places.
-    return page.locator(INTERACTIVE_SELECTOR).nth(ref)
+    # Must use the exact same selector/walk as _snapshot_elements
+    # (INTERACTIVE_SELECTOR via _resolve_ref) so a ref handed back by the
+    # agent resolves to the same element both times - Playwright's locator
+    # pierces open shadow roots the same way in both places, and
+    # _resolve_ref applies the same frame walk _snapshot_elements used to
+    # build the ref in the first place.
+    frame, raw_idx = _resolve_ref(page, ref)
+    return frame.locator(INTERACTIVE_SELECTOR).nth(raw_idx)
 
 
 def _is_critical_label(label: str) -> bool:
@@ -221,67 +347,82 @@ def _mask_critical_fields(page):
     enumerating via Playwright's locator engine, which pierces open shadow
     roots, and (b) setting the masked appearance as inline style directly on
     the element, which always applies regardless of shadow boundaries - no
-    external stylesheet involved. This matters more than the snapshot fix:
-    an unmasked credential field would leak into a saved screenshot, which
-    is exactly what the CREDENTIAL HANDLING contract at the top of this file
-    exists to prevent. Added 2026-09-21 alongside the shadow-DOM snapshot
-    fix; not yet validated against a real shadow-DOM login form."""
-    locator = page.locator(_MASK_FIELD_SELECTOR)
-    try:
-        count = min(locator.count(), 200)
-    except Exception:
-        return 0
+    external stylesheet involved.
+
+    IFRAMES: walks every visible frame via _visible_frames(), same as
+    _snapshot_elements - this was the single most important place for that
+    gap to exist, more so than the snapshot logic itself. A password field
+    rendered inside an iframe (common for SSO logins embedded via an
+    identity-provider iframe - Okta, Azure AD, etc. all do this) was
+    previously invisible to this function exactly like a shadow-DOM field
+    was, meaning it could render UNMASKED in a saved screenshot - a direct
+    violation of the CREDENTIAL HANDLING contract at the top of this file.
+    Deliberately no per-frame element cap here (unlike the 200-element
+    budget in _snapshot_elements) and no origin filtering - masking is a
+    security control, not an agent-facing convenience, so thoroughness
+    matters more than staying under some prompt-size budget; there is no
+    prompt here to bloat. See claude/servicenow-iframe-fix-2026-09-22.md."""
     marked = 0
-    for i in range(count):
+    for frame in _visible_frames(page):
         try:
-            was_masked = locator.nth(i).evaluate(
-                """
-                (el, keywords) => {
-                    const label = (
-                        (el.getAttribute('aria-label') || '') + ' ' +
-                        (el.getAttribute('placeholder') || '') + ' ' +
-                        (el.getAttribute('name') || '') + ' ' +
-                        (el.id || '')
-                    ).toLowerCase();
-                    if (keywords.some(k => label.includes(k))) {
-                        el.dataset.req2qaPrevStyle = el.getAttribute('style') || '';
-                        el.style.setProperty('background', '#111', 'important');
-                        el.style.setProperty('color', 'transparent', 'important');
-                        el.style.setProperty('border-radius', '3px', 'important');
-                        return true;
-                    }
-                    return false;
-                }
-                """,
-                CRITICAL_FIELD_KEYWORDS,
-            )
+            locator = frame.locator(_MASK_FIELD_SELECTOR)
+            count = min(locator.count(), 200)
         except Exception:
             continue
-        if was_masked:
-            marked += 1
+        for i in range(count):
+            try:
+                was_masked = locator.nth(i).evaluate(
+                    """
+                    (el, keywords) => {
+                        const label = (
+                            (el.getAttribute('aria-label') || '') + ' ' +
+                            (el.getAttribute('placeholder') || '') + ' ' +
+                            (el.getAttribute('name') || '') + ' ' +
+                            (el.id || '')
+                        ).toLowerCase();
+                        if (keywords.some(k => label.includes(k))) {
+                            el.dataset.req2qaPrevStyle = el.getAttribute('style') || '';
+                            el.style.setProperty('background', '#111', 'important');
+                            el.style.setProperty('color', 'transparent', 'important');
+                            el.style.setProperty('border-radius', '3px', 'important');
+                            return true;
+                        }
+                        return false;
+                    }
+                    """,
+                    CRITICAL_FIELD_KEYWORDS,
+                )
+            except Exception:
+                continue
+            if was_masked:
+                marked += 1
     return marked
 
 
 def _unmask(page):
-    locator = page.locator(_MASK_FIELD_SELECTOR)
-    try:
-        count = min(locator.count(), 200)
-    except Exception:
-        return
-    for i in range(count):
+    # Must walk the same frames _mask_critical_fields did, for the same
+    # reason _element_locator must match _snapshot_elements's walk - see
+    # _mask_critical_fields's docstring for why iframes matter here.
+    for frame in _visible_frames(page):
         try:
-            locator.nth(i).evaluate(
-                """
-                (el) => {
-                    if (el.dataset.req2qaPrevStyle !== undefined) {
-                        el.setAttribute('style', el.dataset.req2qaPrevStyle);
-                        delete el.dataset.req2qaPrevStyle;
-                    }
-                }
-                """
-            )
+            locator = frame.locator(_MASK_FIELD_SELECTOR)
+            count = min(locator.count(), 200)
         except Exception:
             continue
+        for i in range(count):
+            try:
+                locator.nth(i).evaluate(
+                    """
+                    (el) => {
+                        if (el.dataset.req2qaPrevStyle !== undefined) {
+                            el.setAttribute('style', el.dataset.req2qaPrevStyle);
+                            delete el.dataset.req2qaPrevStyle;
+                        }
+                    }
+                    """
+                )
+            except Exception:
+                continue
 
 
 def _capture_screenshot(page, shots_dir: Path, label: str, rl=None, step_num: Optional[int] = None) -> str:
@@ -614,7 +755,27 @@ def execute_test_case(
                             loc = _element_locator(page, inp["ref"])
                             label = (loc.get_attribute("aria-label") or loc.inner_text() or "an element").strip()[:60]
                             loc.click(timeout=ACTION_TIMEOUT_MS)
-                            page.wait_for_load_state("domcontentloaded", timeout=ACTION_TIMEOUT_MS)
+                            # Waits on the SPECIFIC frame the clicked element
+                            # belonged to, not always the top-level page - a
+                            # click inside a child iframe (e.g. ServiceNow's
+                            # Polaris shell, where the outer URL can stay
+                            # identical while only the iframe's content
+                            # navigates) previously waited on the wrong
+                            # frame's load state, which returns instantly
+                            # since the top page never left
+                            # "domcontentloaded" - the very next snapshot
+                            # could then race ahead of the iframe's new
+                            # content finishing its load. Best-effort: a
+                            # frame that's mid-navigation can itself throw
+                            # here, which must never fail the click that
+                            # already succeeded - the existing stall-
+                            # detection loop is the safety net if this wait
+                            # doesn't fully cover a given case.
+                            clicked_frame, _ = _resolve_ref(page, inp["ref"])
+                            try:
+                                clicked_frame.wait_for_load_state("domcontentloaded", timeout=ACTION_TIMEOUT_MS)
+                            except Exception:
+                                pass
                             result_payload = {"ok": True}
                             safe_label = label if not _is_critical_label(label) else "a control"
                             step_log.append(f"Clicked: {safe_label}" if not _is_critical_label(label) else "Clicked a control")
@@ -643,12 +804,31 @@ def execute_test_case(
                                 rl.event("step", {"step": step_num, "action": "select_option", "target": f"field ref {inp['ref']}", "value": inp["value"], "result": "ok"})
                             screenshots.append(_capture_screenshot(page, shots_dir, f"after_select_{step_num}", rl=rl, step_num=step_num))
                         elif name == "wait_for_text":
+                            # IFRAMES: checks every visible frame, not just the
+                            # top-level page (see _visible_frames' module note) -
+                            # a confirmation message rendered inside an iframe
+                            # (as ServiceNow's does) previously could never be
+                            # found here, only ever on the outer page. The given
+                            # timeout is split across frames rather than applied
+                            # in full to each one in sequence, so the total
+                            # worst-case wait when the text is genuinely absent
+                            # stays close to the original budget regardless of
+                            # frame count - for the common single-frame case
+                            # (len(frames) == 1) this is identical to before.
                             timeout = inp.get("timeout_ms", 5000)
-                            try:
-                                page.get_by_text(inp["text"], exact=False).first.wait_for(timeout=timeout)
-                                result_payload = {"found": True}
-                            except PlaywrightTimeoutError:
-                                result_payload = {"found": False}
+                            frames_to_check = _visible_frames(page)
+                            per_frame_timeout = max(500, timeout // max(1, len(frames_to_check)))
+                            found = False
+                            for frame in frames_to_check:
+                                try:
+                                    frame.get_by_text(inp["text"], exact=False).first.wait_for(timeout=per_frame_timeout)
+                                    found = True
+                                    break
+                                except PlaywrightTimeoutError:
+                                    continue
+                                except Exception:
+                                    continue
+                            result_payload = {"found": found}
                             step_log.append(f"Waited for confirmation text")
                             if rl is not None:
                                 rl.event("step", {"step": step_num, "action": "wait_for_text", "target": inp.get("text", "")[:80], "result": result_payload})
