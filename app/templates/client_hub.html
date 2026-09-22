@@ -30,9 +30,15 @@
   {% else %}
 
   <div class="alert alert-info" style="font-size:12.5px">
+    {% if is_trial %}
+    You're viewing this with a free trial code — test case generation is included below. Live execution,
+    run history, impact analysis, and saved test cases become available on a paid engagement.
+    Contact <a href="mailto:kalyan@req2qa.com">kalyan@req2qa.com</a> to upgrade.
+    {% else %}
     Showing what's included on this access code
     ({% if service_type == "generation" %}test case generation only{% elif service_type == "execution" %}live execution only{% else %}test case generation + live execution{% endif %}).
     Need something that isn't shown as available? Contact <a href="mailto:kalyan@req2qa.com">kalyan@req2qa.com</a>.
+    {% endif %}
   </div>
 
   <div class="hub-grid">
@@ -52,24 +58,32 @@
       <p>Already have test cases? Bring your own suite and run it live against your environment.</p>
       {% if service_type != "generation" %}
       <a class="btn secondary" href="/import-tests">Import Test Cases &rarr;</a>
+      {% elif is_trial %}
+      <p class="hub-card-note">Not available on a free trial code.</p>
       {% else %}
       <p class="hub-card-note">Not included on this access code (generation only).</p>
       {% endif %}
     </div>
 
-    <div class="hub-card">
+    <div class="hub-card {% if is_trial %}hub-card-disabled{% endif %}">
       <h3>Run History</h3>
       <p>Look up a past report or workbook using your access code.</p>
+      {% if not is_trial %}
       <form action="/history" method="post" style="margin-top:10px">
         <input type="hidden" name="access_code" value="{{ access_code }}">
         <button type="submit" class="btn secondary">View Run History &rarr;</button>
       </form>
+      {% else %}
+      <p class="hub-card-note">Not available on a free trial code.</p>
+      {% endif %}
     </div>
 
-    <div class="hub-card {% if service_type == 'execution' %}hub-card-disabled{% endif %}">
+    <div class="hub-card {% if service_type == 'execution' or is_trial %}hub-card-disabled{% endif %}">
       <h3>Requirement Impact Analysis</h3>
       <p>See what changed between two requirement versions, and which test cases may need a second look.</p>
-      {% if service_type != "execution" %}
+      {% if is_trial %}
+      <p class="hub-card-note">Not available on a free trial code.</p>
+      {% elif service_type != "execution" %}
       <form action="/requirement-history" method="post" style="margin-top:10px">
         <input type="hidden" name="access_code" value="{{ access_code }}">
         <button type="submit" class="btn secondary">View Impact Analysis &rarr;</button>
@@ -87,6 +101,8 @@
         <input type="hidden" name="access_code" value="{{ access_code }}">
         <button type="submit" class="btn secondary">View Saved Test Cases &rarr;</button>
       </form>
+      {% elif is_trial %}
+      <p class="hub-card-note">Not available on a free trial code.</p>
       {% else %}
       <p class="hub-card-note">Not included on this access code (generation only).</p>
       {% endif %}
