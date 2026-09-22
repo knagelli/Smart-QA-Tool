@@ -28,7 +28,7 @@
 
   <form class="card form" action="/import-tests" method="post" enctype="multipart/form-data">
     <label>Access code
-      <input type="password" name="access_code" required placeholder="Provided by your account manager">
+      <input type="password" name="access_code" required placeholder="Provided by your account manager" value="{{ request.cookies.get('req2qa_client_session', '') }}">
     </label>
 
     <label>Application under test
@@ -59,6 +59,7 @@
   </form>
   <p class="footnote">Processing usually takes a few seconds for a well-structured spreadsheet, or up to a minute for a document that needs to be read case-by-case.</p>
   <p class="privacy-note">Your uploaded file is processed securely and is not stored beyond this review session &mdash; only the confirmed test cases you approve are kept.</p>
+  {% include "_client_hub_footnote.html" %}
   <p class="footnote"><a href="/">&larr; Back to Req2QA</a></p>
 </div>
 {% include "_footer.html" %}

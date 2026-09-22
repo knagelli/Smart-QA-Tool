@@ -24,6 +24,7 @@
 <noscript><style>#chooser{display:none} .tab-panel{display:block !important}</style></noscript>
 {% include "_topbar.html" %}
 <div class="wrap wrap-wide">
+  {% include "_client_hub_footnote.html" %}
   <header class="hdr">
     <div class="hero-grid">
     <div class="hero-copy">
@@ -237,7 +238,7 @@
     </p>
     <form class="card form" id="analyze-form" action="/analyze" method="post" enctype="multipart/form-data">
       <label>Access code
-        <input type="password" name="access_code" id="analyze-access-code" required placeholder="Provided by your account manager">
+        <input type="password" name="access_code" id="analyze-access-code" required placeholder="Provided by your account manager" value="{{ request.cookies.get('req2qa_client_session', '') }}">
       </label>
 
       <label>Application under test
@@ -371,7 +372,7 @@
     </p>
     <form class="card form" action="/analyze-custom" method="post" enctype="multipart/form-data">
       <label>Access code
-        <input type="password" name="access_code" required placeholder="Provided by your account manager">
+        <input type="password" name="access_code" required placeholder="Provided by your account manager" value="{{ request.cookies.get('req2qa_client_session', '') }}">
       </label>
 
       <label>Application name
