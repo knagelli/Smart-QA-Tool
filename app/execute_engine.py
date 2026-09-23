@@ -73,6 +73,33 @@ MAX_AGENT_STEPS = 60
 # protects clients from the "sits there until the step limit" experience;
 # raising the cap alone would only make a genuine stall slower to report.
 STALL_LIMIT = 3
+
+# PASS review gate (2026-09-23) - see claude/pass-review-gate-evidence-table-
+# 2026-09-23.md. In the real TC-001 ServiceNow run the agent skipped two
+# explicit steps (Category left wrong, Short description never filled) yet
+# the design allowed it to declare PASS from memory alone. The FIRST
+# finish_test(PASS) in a test case is therefore not accepted immediately:
+# the harness replies with the original steps/expected result PLUS the
+# actual current form field values read straight from the page, and only a
+# second finish_test is final. Showing the agent reality (not asking it to
+# recall) is what makes a reflexive rubber-stamp PASS hard to give.
+# PASS_REVIEW_EXTRA_STEPS is a one-time bounded budget added only on that
+# path, so a PASS given on the very last step can still be reviewed and
+# corrected instead of being overwritten by the step-limit BLOCKED.
+# Flip ENABLE_PASS_REVIEW to False for an instant code-free revert.
+ENABLE_PASS_REVIEW = True
+PASS_REVIEW_EXTRA_STEPS = 8
+# Evidence table limits: never capture more than this many fields, or more
+# than this many characters of any one value.
+EVIDENCE_MAX_FIELDS = 60
+EVIDENCE_MAX_VALUE_CHARS = 120
+# Extra label keywords masked in the evidence table only (on top of
+# CRITICAL_FIELD_KEYWORDS): secret-like fields that the screenshot mask list
+# was never designed around because screenshots of them were never taken.
+EVIDENCE_SENSITIVE_KEYWORDS = [
+    "token", "secret", "api key", "apikey", "private key", "otp", "one-time",
+    "cvv", "card number", "pin number", "credential",
+]
 NAV_TIMEOUT_MS = 20000
 ACTION_TIMEOUT_MS = 10000
 
@@ -184,16 +211,20 @@ _ELEMENT_INFO_JS = """
     const visible = rect.width > 0 && rect.height > 0 &&
         getComputedStyle(el).visibility !== 'hidden' &&
         getComputedStyle(el).display !== 'none';
+    const tag = el.tagName.toLowerCase();
+    const itype = (el.getAttribute('type') || '').toLowerCase();
+    // 2026-09-23: a password input's value must never become its label -
+    // previously an unlabeled password field (no aria-label/placeholder/
+    // name) put the typed password itself into the model context and the
+    // run log via this fallback. Found by the PASS-review synthetic test.
     const label = (
         el.getAttribute('aria-label') ||
         el.getAttribute('placeholder') ||
         el.getAttribute('name') ||
         el.innerText ||
-        el.value ||
-        el.id || ''
+        (itype === 'password' ? '' : el.value) ||
+        el.id || (itype === 'password' ? 'Password' : '')
     ).trim().slice(0, 80);
-    const tag = el.tagName.toLowerCase();
-    const itype = (el.getAttribute('type') || '').toLowerCase();
     let value_hash = 0;
     if (tag === 'input' || tag === 'textarea' || tag === 'select') {
         const v = el.value || '';
@@ -427,6 +458,121 @@ def _element_locator(page, ref: int):
 def _is_critical_label(label: str) -> bool:
     low = (label or "").lower()
     return any(k in low for k in CRITICAL_FIELD_KEYWORDS)
+
+
+# Evidence table (2026-09-23): reads every visible form field in one frame
+# as {label, value, kind}. This is deliberately the ONLY place raw field
+# values are ever read by the harness; the redaction rules are applied
+# here in-browser (password/hidden/file inputs never leave the page) and
+# again in Python (_capture_form_state masks CRITICAL_FIELD_KEYWORDS
+# labels), so a sensitive value is never returned, logged or reported.
+# Select fields report the visible option TEXT ("Inquiry / Help"), not the
+# stored option value ("inquiry"), because the evidence is read by a
+# human and by the agent against human-written steps.
+_FORM_STATE_JS = """
+(root) => {
+    const out = [];
+    const walk = (node) => {
+        const els = node.querySelectorAll('input, textarea, select, [role="combobox"]:not(input)');
+        for (const el of els) out.push(el);
+        for (const h of node.querySelectorAll('*')) { if (h.shadowRoot) walk(h.shadowRoot); }
+    };
+    walk(root);
+    const labelFor = (el) => {
+        let t = '';
+        if (el.labels && el.labels.length) t = el.labels[0].innerText;
+        if (!t && el.getAttribute('aria-labelledby')) {
+            t = el.getAttribute('aria-labelledby').split(/\\s+/)
+                .map(id => { const n = document.getElementById(id); return n ? n.innerText : ''; }).join(' ');
+        }
+        t = t || el.getAttribute('aria-label') || el.getAttribute('placeholder') ||
+            el.getAttribute('title') || el.getAttribute('name') || el.id || '';
+        return t.replace(/\\s+/g, ' ').replace(/^[*\\s]+/, '').trim();
+    };
+    const res = [];
+    for (const el of out) {
+        const tag = el.tagName.toLowerCase();
+        const type = (el.getAttribute('type') || '').toLowerCase();
+        if (tag === 'input' && ['password', 'hidden', 'file', 'submit', 'button', 'reset', 'image'].includes(type)) continue;
+        const r = el.getBoundingClientRect();
+        const cs = getComputedStyle(el);
+        if (r.width === 0 || r.height === 0 || cs.visibility === 'hidden' || cs.display === 'none') continue;
+        let value, kind;
+        if (tag === 'select') {
+            const o = el.options[el.selectedIndex];
+            value = o ? o.text : ''; kind = 'select';
+        } else if (type === 'checkbox' || type === 'radio') {
+            value = el.checked ? 'checked' : 'unchecked'; kind = type;
+        } else if (tag === 'input' || tag === 'textarea') {
+            value = el.value || ''; kind = tag === 'textarea' ? 'textarea' : 'text';
+        } else {
+            value = (el.innerText || el.getAttribute('aria-valuetext') || '').trim(); kind = 'combobox';
+        }
+        res.push({label: labelFor(el), value: value, kind: kind,
+                  readonly: !!(el.readOnly || el.disabled || el.getAttribute('aria-readonly') === 'true')});
+    }
+    return res;
+}
+"""
+
+
+def _capture_form_state(page) -> list:
+    """Evidence table: visible form fields and their CURRENT values across
+    every visible frame. Never raises - evidence is a best-effort aid and
+    must never fail a test case. Sensitive values are masked (see
+    _FORM_STATE_JS note); fields with no label are dropped since they
+    can't be matched to a step by a human or the agent anyway."""
+    fields = []
+    try:
+        frames = _visible_frames(page)
+    except Exception:
+        frames = [page.main_frame]
+    for frame in frames:
+        try:
+            rows = frame.evaluate(f"({_FORM_STATE_JS})(document)")
+        except Exception:
+            continue
+        for row in rows or []:
+            label = (row.get("label") or "").strip()[:80]
+            if not label:
+                continue
+            value = str(row.get("value") or "")
+            low = label.lower()
+            if _is_critical_label(label) or any(k in low for k in EVIDENCE_SENSITIVE_KEYWORDS):
+                value = "[hidden - sensitive field]"
+            elif len(value) > EVIDENCE_MAX_VALUE_CHARS:
+                value = value[:EVIDENCE_MAX_VALUE_CHARS] + "..."
+            fields.append({"label": label, "value": value if value else "(empty)",
+                           "kind": row.get("kind", ""), "readonly": bool(row.get("readonly"))})
+            if len(fields) >= EVIDENCE_MAX_FIELDS:
+                return fields
+    return fields
+
+
+def _pass_review_message(test_case: dict, form_fields: list) -> dict:
+    return {
+        "ok": False,
+        "review_required": True,
+        "message": (
+            "Before PASS is accepted, check it against the ORIGINAL test case and the page AS IT IS "
+            "RIGHT NOW (not what you remember doing). Go through each numbered step and expected result "
+            "below one by one. Compare each value the steps call for with 'current_form_fields', which "
+            "was read directly from the page just now. If any step was skipped, any value is wrong, or "
+            "a required field is '(empty)', go back and complete it with the normal tools now - you have "
+            "a few extra actions reserved for this. Then call finish_test again. Only call PASS if every "
+            "step and the expected result are genuinely satisfied; otherwise call FAIL or BLOCKED and "
+            "name the specific step. This check happens once; your next finish_test is final."
+        ),
+        "original_precondition": test_case.get("precondition", ""),
+        "original_steps": test_case.get("steps", ""),
+        "original_expected_result": test_case.get("expected_result", ""),
+        "current_form_fields": form_fields,
+        "note_on_form_fields": (
+            "If the form has already been submitted and you are now on a list/confirmation page, these "
+            "fields describe that page instead - in that case verify the record against the steps "
+            "(e.g. open it or check the confirmation) before finishing."
+        ),
+    }
 
 
 _MASK_FIELD_SELECTOR = 'input, textarea, select, [role="textbox"]'
@@ -826,8 +972,16 @@ def execute_test_case(
             # any further ones in this same test case - one generated file
             # per run is all a single scenario needs.
             attachment_path: list = [None]
+            # PASS review gate state - see ENABLE_PASS_REVIEW note at the top.
+            # step_limit only ever grows, once, on the PASS-review path.
+            step_limit = MAX_AGENT_STEPS
+            pass_review_done = False
+            pass_review_step = None
+            first_pass_notes = None
 
-            for step_num in range(MAX_AGENT_STEPS):
+            for step_num in range(MAX_AGENT_STEPS + PASS_REVIEW_EXTRA_STEPS):
+                if step_num >= step_limit:
+                    break
                 # Rate-limit retry + distinct IAM/permission diagnostics
                 # (2026-09-23) - see claude/[pending]-bedrock-rate-limit-
                 # and-error-hardening-2026-09-23.md. Root cause of today's
@@ -915,7 +1069,7 @@ def execute_test_case(
                             ]
                             result_payload = {
                                 "url": page.url, "title": page.title(), "elements": elements_for_model,
-                                "steps_remaining": MAX_AGENT_STEPS - step_num - 1,
+                                "steps_remaining": step_limit - step_num - 1,
                             }
                             if stall_count > 0:
                                 # Told to the agent, not just logged - a stall it isn't
@@ -1088,6 +1242,34 @@ def execute_test_case(
                             if rl is not None:
                                 rl.event("step", {"step": step_num, "action": "upload_file", "target": f"field ref {inp['ref']}", "filename": attachment_path[0].name, "result": "ok"})
                             screenshots.append(_capture_screenshot(page, shots_dir, f"after_upload_{step_num}", rl=rl, step_num=step_num))
+                        elif (name == "finish_test" and ENABLE_PASS_REVIEW and pass_review_done
+                              and pass_review_step == step_num):
+                            # A second finish_test in the SAME model response as the
+                            # one just intercepted - the agent hasn't seen the review
+                            # yet, so it can't count as the confirming call. Found by
+                            # the synthetic test (two PASS calls in one response
+                            # bypassed the gate entirely).
+                            result_payload = {"ok": False, "error": "Ignored: review the reply to your previous finish_test first, then call finish_test once."}
+                        elif name == "finish_test" and ENABLE_PASS_REVIEW and inp.get("verdict") == "PASS" and not pass_review_done:
+                            # First PASS: not accepted yet. Reply with the original
+                            # steps + live evidence table and grant the one-time
+                            # extra budget. verdict stays None, so if the budget is
+                            # then exhausted the normal step-limit BLOCKED applies.
+                            pass_review_done = True
+                            pass_review_step = step_num
+                            first_pass_notes = inp.get("notes", "")
+                            step_limit = max(step_limit, step_num + 1 + PASS_REVIEW_EXTRA_STEPS)
+                            form_fields = _capture_form_state(page)
+                            result_payload = _pass_review_message(test_case, form_fields)
+                            step_log.append("Asked to re-check the PASS against the original steps and the live form")
+                            if rl is not None:
+                                # Labels + empty/filled only in the log - values stay
+                                # in the report/agent context, never the run log.
+                                rl.event("step", {
+                                    "step": step_num, "action": "pass_review", "first_pass_notes": first_pass_notes,
+                                    "new_step_limit": step_limit,
+                                    "fields": [{"label": f["label"], "filled": f["value"] != "(empty)"} for f in form_fields],
+                                })
                         elif name == "finish_test":
                             verdict = inp["verdict"]
                             notes = inp["notes"]
@@ -1119,7 +1301,7 @@ def execute_test_case(
 
                 if on_step is not None:
                     try:
-                        on_step(step_num + 1, MAX_AGENT_STEPS)
+                        on_step(step_num + 1, step_limit)
                     except Exception:
                         pass
 
@@ -1134,13 +1316,31 @@ def execute_test_case(
                         f"(last seen at {stuck_url}). This usually means a control needed for this test case "
                         f"couldn't be reached with the current toolset, rather than a slow-loading page.",
                     )
+                    if pass_review_done:
+                        notes += (
+                            f" This happened while re-checking a PASS against the original steps; the "
+                            f"agent's first (unconfirmed) PASS said: {first_pass_notes}"
+                        )
                     if rl is not None:
                         rl.event("error", {"message": "stalled - no page change", "stall_count": stall_count, "url": stuck_url})
                     break
-            else:
-                verdict, notes = "BLOCKED", f"Reached the {MAX_AGENT_STEPS}-action limit for this test case without a clear result."
+            if verdict is None:
+                # Loop ran out of budget (normal or PASS-review-extended)
+                # without an accepted verdict.
+                if pass_review_done:
+                    notes = (
+                        f"Reached the action limit while re-checking a PASS against the original steps. "
+                        f"The agent's first (unconfirmed) PASS said: {first_pass_notes}"
+                    )
+                else:
+                    notes = f"Reached the {MAX_AGENT_STEPS}-action limit for this test case without a clear result."
+                verdict = "BLOCKED"
                 if rl is not None:
-                    rl.event("error", {"message": "step limit reached", "max_steps": MAX_AGENT_STEPS})
+                    rl.event("error", {"message": "step limit reached", "max_steps": step_limit})
+
+            # Evidence table for the report: always captured, whatever the
+            # verdict, so a human can compare steps vs actual page state.
+            evidence_fields = _capture_form_state(page)
 
             screenshots.append(_capture_screenshot(page, shots_dir, "final", rl=rl, step_num=MAX_AGENT_STEPS))
             browser.close()
@@ -1156,4 +1356,10 @@ def execute_test_case(
         "step_log": step_log,
         "screenshots": screenshots,
         "created_entity": created_entity,
+        "evidence": {
+            "steps": test_case.get("steps", ""),
+            "expected_result": test_case.get("expected_result", ""),
+            "form_fields": evidence_fields,
+            "pass_reviewed": pass_review_done,
+        },
     }

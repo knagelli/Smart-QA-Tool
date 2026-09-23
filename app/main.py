@@ -2488,6 +2488,7 @@ async def _run_execution_batch_impl(
                 "notes": notes,
                 "step_log": outcome["step_log"],
                 "screenshots": [f"{shots_dir.name}/{fn}" for fn in outcome["screenshots"]],
+                "evidence": outcome.get("evidence"),
             }
             rl.finish(outcome["verdict"].lower(), {"notes": notes, "step_count": len(outcome["step_log"])})
 

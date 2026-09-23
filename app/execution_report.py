@@ -83,6 +83,31 @@ def _select_screenshots(screenshots: list, verdict: str, cap: int | None) -> tup
     return [screenshots[i] for i in indices], note
 
 
+def _evidence_html(ev) -> str:
+    """Steps-vs-actual evidence table (2026-09-23, PASS review gate). Shown
+    for every verdict so a reviewer can spot a skipped step in seconds.
+    Values arrive already redacted by execute_engine._capture_form_state."""
+    if not ev:
+        return ""
+    fields = ev.get("form_fields") or []
+    rows = "".join(
+        f'<tr><td>{esc(f.get("label",""))}</td>'
+        f'<td class="{"ev-empty" if f.get("value") == "(empty)" else ""}">{esc(f.get("value",""))}</td></tr>'
+        for f in fields
+    ) or '<tr><td colspan="2" class="empty">No form fields visible at the end of the run.</td></tr>'
+    reviewed = ('<p class="ev-note">The agent was made to re-check its PASS against these steps and the live form before it was accepted.</p>'
+                if ev.get("pass_reviewed") else "")
+    return f"""<details class="evidence">
+    <summary>Evidence: original steps vs. what the page showed at the end</summary>
+    {reviewed}
+    <div class="ev-grid">
+      <div><h4>Test steps</h4><pre class="ev-steps">{esc(ev.get("steps",""))}</pre>
+      <h4>Expected result</h4><pre class="ev-steps">{esc(ev.get("expected_result",""))}</pre></div>
+      <div><h4>Form fields at end of run</h4><table class="ev-table"><tr><th>Field</th><th>Value</th></tr>{rows}</table></div>
+    </div>
+  </details>"""
+
+
 def build_execution_report(data: dict) -> str:
     """data shape:
     {
@@ -145,6 +170,7 @@ def build_execution_report(data: dict) -> str:
     {badge}
   </div>
   <p class="exec-notes">{esc(r.get('notes',''))}</p>
+  {_evidence_html(r.get("evidence"))}
   <details>
     <summary>Step log ({len(r.get('step_log', []))} actions)</summary>
     <ol class="exec-steps">{step_items}</ol>
@@ -178,6 +204,9 @@ body{{{BODY_FONT_CSS}background:var(--bg);color:var(--text);font-size:14px;line-
 .exec-case.row-flagged{{border-left-color:var(--red)}}
 .exec-case-hdr{{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:12px}}
 .exec-notes{{color:var(--muted);margin-bottom:10px}}
+.evidence{{margin:6px 0 10px}}.ev-grid{{display:grid;grid-template-columns:1fr 1fr;gap:14px}}@media(max-width:700px){{.ev-grid{{grid-template-columns:1fr}}}}
+.ev-steps{{white-space:pre-wrap;font:inherit;font-size:.9em;margin:0 0 8px}}.ev-table{{border-collapse:collapse;width:100%;font-size:.9em}}
+.ev-table td,.ev-table th{{border:1px solid #ddd;padding:4px 6px;text-align:left;vertical-align:top}}.ev-empty{{color:#b42318;font-weight:600}}.ev-note{{font-size:.85em;color:var(--muted)}}
 .exec-steps{{margin:8px 0 0 20px;font-size:13px;color:var(--muted)}}
 .badge{{display:inline-block;font-size:11px;font-weight:700;padding:3px 10px;border-radius:4px;white-space:nowrap}}
 .badge.valid{{background:var(--gbg);color:var(--green)}}.badge.flagged{{background:var(--abg);color:var(--amber)}}
