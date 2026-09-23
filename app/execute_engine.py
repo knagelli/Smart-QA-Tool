@@ -267,7 +267,13 @@ _ELEMENT_INFO_JS = """
 # Cross-origin iframes are NOT a special case here - Playwright's Frame API
 # works the same regardless of origin (unlike raw in-page JavaScript, which
 # same-origin policy would block); no cross-origin workaround was needed.
-GLOBAL_REF_FRAME_MULTIPLIER = 1000  # see _resolve_ref's docstring
+# 2026-09-24: raised from 1000. With the snapshot-budget fix the raw scan
+# per frame is no longer capped at 200, and ServiceNow-style forms carry
+# hundreds of hidden inputs; a 1000-wide range would have forced a raw cap
+# of 999 that a hidden-heavy frame can exhaust before reaching any visible
+# control (reproduced in the synthetic test). Refs are per-snapshot only and
+# never persisted, so the larger range changes nothing else.
+GLOBAL_REF_FRAME_MULTIPLIER = 100000  # see _resolve_ref's docstring
 
 
 def _visible_frames(page) -> list:
@@ -313,8 +319,8 @@ def _resolve_ref(page, ref: int):
     into (frame, raw_index_within_that_frame). Refs stay plain integers -
     no change to the tool schema the agent sees - by encoding the frame's
     position in _visible_frames()'s list in the ref's high digits:
-    ref = frame_position * GLOBAL_REF_FRAME_MULTIPLIER + raw_index. 1000 is
-    comfortably above the existing per-frame raw enumeration cap (200, see
+    ref = frame_position * GLOBAL_REF_FRAME_MULTIPLIER + raw_index. The
+    multiplier is kept above SNAPSHOT_RAW_PER_FRAME_CAP (asserted in
     _snapshot_elements), so this can never collide. Raises IndexError if the
     frame at that position no longer exists (the frame tree changed shape
     since the ref was issued) - callers already wrap every tool call in a
@@ -327,7 +333,36 @@ def _resolve_ref(page, ref: int):
     return frames[frame_idx], raw_idx
 
 
-def _snapshot_elements(page) -> list:
+# Snapshot budgets (2026-09-24) - see claude/snapshot-budget-fix-2026-09-24.md.
+# Real TC-001 run: the old 200 cap counted RAW selector matches (hidden
+# inputs, display:none tips, ServiceNow's many hidden fields) BEFORE the
+# visible/labelled filter, so the incident form was silently cut off at the
+# "Impact" label - Short description, Description and the bottom of the form
+# never reached the agent in any snapshot. The cap now counts only elements
+# the agent can actually use. The raw scan per frame stays below
+# GLOBAL_REF_FRAME_MULTIPLIER so a raw index can never spill into the next
+# frame's ref range. Any truncation is now reported to the agent and logged.
+SNAPSHOT_KEPT_BUDGET = 200
+SNAPSHOT_RAW_PER_FRAME_CAP = 20000  # must stay < GLOBAL_REF_FRAME_MULTIPLIER
+
+# Runs the per-element info + keep filter inside the browser in ONE call per
+# frame and returns only kept elements (with their raw index, which is what
+# the ref encodes) plus how many usable ones were over budget - so a frame
+# with thousands of hidden inputs costs one round trip and a small payload.
+# Keep rule: visible AND labelled, or any <input type=file> (see the note at
+# the end of _snapshot_elements for why hidden file inputs are kept).
+_ELEMENT_INFO_ALL_JS = (
+    "([cap, budget]) => { const info = (" + _ELEMENT_INFO_JS.strip() + "); "
+    "return (els) => { const kept = []; let omitted = 0; const n = Math.min(els.length, cap); "
+    "for (let i = 0; i < n; i++) { let d; try { d = info(els[i]); } catch (e) { continue; } "
+    "const keep = (d.visible && d.label) || (d.tag === 'input' && d.type === 'file'); "
+    "if (!keep) continue; if (kept.length >= budget) { omitted++; continue; } "
+    "d.raw_index = i; kept.push(d); } "
+    "return {kept: kept, omitted: omitted, raw_total: els.length}; }; }"
+)
+
+
+def _snapshot_elements(page, stats: Optional[dict] = None) -> list:
     """Build a DOM/accessibility-tree-ish snapshot: every interactive
     element with a stable ref, its role, and its best-available label.
     Claude sees this list (never a screenshot) to decide what to do next -
@@ -370,34 +405,55 @@ def _snapshot_elements(page) -> list:
     agent's reasoning can tell it apart from the main page - added only for
     those elements, so a normal single-frame app's elements are byte-for-
     byte what they were before this change."""
+    assert SNAPSHOT_RAW_PER_FRAME_CAP < GLOBAL_REF_FRAME_MULTIPLIER
     frames = _visible_frames(page)
     elements = []
+    omitted_keepable = 0      # usable elements dropped because the kept budget ran out
+    raw_capped_frames = 0     # frames with more raw matches than we can scan
+    # Pass 1: each frame reports up to SNAPSHOT_KEPT_BUDGET usable elements
+    # (one browser round trip per frame, not one per element).
+    per_frame = []  # (frame_idx, frame, kept_list, total_usable)
     for frame_idx, frame in enumerate(frames):
-        budget = 200 - len(elements)
-        if budget <= 0:
-            break
         try:
             locator = frame.locator(INTERACTIVE_SELECTOR)
-            count = min(locator.count(), budget)
+            fn = f"(els) => ({_ELEMENT_INFO_ALL_JS})([{SNAPSHOT_RAW_PER_FRAME_CAP}, {SNAPSHOT_KEPT_BUDGET}])(els)"
+            res = locator.evaluate_all(fn)
         except Exception:
             # A frame that's gone/unreachable by the time we query it - skip
             # it, same tolerance as a single stale element elsewhere here.
             continue
-        for i in range(count):
-            try:
-                data = locator.nth(i).evaluate(_ELEMENT_INFO_JS)
-            except Exception:
-                # A node that disappeared/detached between count() and evaluate()
-                # (rare, but real on a dynamically re-rendering SPA) - skip it
-                # rather than aborting the whole snapshot over one stale ref.
-                continue
-            data["ref"] = frame_idx * GLOBAL_REF_FRAME_MULTIPLIER + i
+        if res.get("raw_total", 0) > SNAPSHOT_RAW_PER_FRAME_CAP:
+            raw_capped_frames += 1
+        kept = res.get("kept", [])
+        per_frame.append((frame_idx, frame, kept, len(kept) + res.get("omitted", 0)))
+    # Pass 2: split the global budget fairly across frames (water-filling),
+    # so one large frame listed first (e.g. a big nav frame) can never starve
+    # a later frame (e.g. the form) - found by the synthetic test.
+    alloc = {}
+    remaining = SNAPSHOT_KEPT_BUDGET
+    order = sorted(range(len(per_frame)), key=lambda k: len(per_frame[k][2]))
+    for pos, k in enumerate(order):
+        share = remaining // (len(order) - pos)
+        alloc[k] = min(len(per_frame[k][2]), share)
+        remaining -= alloc[k]
+    for k, (frame_idx, frame, kept, total_usable) in enumerate(per_frame):
+        omitted_keepable += total_usable - alloc[k]
+        for data in kept[:alloc[k]]:
+            data["ref"] = frame_idx * GLOBAL_REF_FRAME_MULTIPLIER + data.pop("raw_index")
             if frame_idx != 0:
                 try:
                     data["frame_url"] = frame.url[:200]
                 except Exception:
                     pass
             elements.append(data)
+    if stats is not None:
+        stats["omitted_keepable"] = omitted_keepable
+        stats["raw_capped_frames"] = raw_capped_frames
+    if omitted_keepable or raw_capped_frames:
+        logger.warning(
+            "snapshot truncated: %d usable element(s) omitted over budget %d; %d frame(s) over raw cap %d",
+            omitted_keepable, SNAPSHOT_KEPT_BUDGET, raw_capped_frames, SNAPSHOT_RAW_PER_FRAME_CAP,
+        )
     if len(frames) > 1:
         # Observability, not functional - added 2026-09-22 alongside this
         # fix so a FUTURE site with some frame topology this fix didn't
@@ -422,7 +478,9 @@ def _snapshot_elements(page) -> list:
     # timing out every attempt (seen on OrangeHRM's profile-photo
     # upload). Kept it filtered for every other element type, since
     # that's still the right rule for everything that isn't a file input.
-    return [e for e in elements if (e["visible"] and e["label"]) or (e["tag"] == "input" and e["type"] == "file")]
+    # (filtering now happens in-browser in _ELEMENT_INFO_ALL_JS so the budget
+    # above counts only kept elements - see SNAPSHOT_KEPT_BUDGET note.)
+    return elements
 
 
 def _snapshot_fingerprint(page, elements: list) -> tuple:
@@ -1047,7 +1105,8 @@ def execute_test_case(
                     name, inp = tu.name, tu.input
                     try:
                         if name == "get_snapshot":
-                            elements = _snapshot_elements(page)
+                            snap_stats = {}
+                            elements = _snapshot_elements(page, stats=snap_stats)
                             fingerprint = _snapshot_fingerprint(page, elements)
                             if fingerprint == last_fingerprint:
                                 stall_count += 1
@@ -1071,6 +1130,17 @@ def execute_test_case(
                                 "url": page.url, "title": page.title(), "elements": elements_for_model,
                                 "steps_remaining": step_limit - step_num - 1,
                             }
+                            if snap_stats.get("omitted_keepable") or snap_stats.get("raw_capped_frames"):
+                                # Never truncate silently again: the agent must know
+                                # the page has more than it is being shown.
+                                result_payload["truncated"] = (
+                                    "This page has more controls than could be listed "
+                                    f"({snap_stats.get('omitted_keepable', 0)} usable ones omitted"
+                                    + (", and part of at least one frame was too large to scan" if snap_stats.get("raw_capped_frames") else "")
+                                    + "). If the "
+                                    "field you need is missing, it exists but is not shown - say so "
+                                    "in finish_test rather than guessing a ref."
+                                )
                             if stall_count > 0:
                                 # Told to the agent, not just logged - a stall it isn't
                                 # aware of just repeats; naming it here is what lets the
@@ -1100,6 +1170,8 @@ def execute_test_case(
                                     "step": step_num, "action": "get_snapshot", "target": page.url,
                                     "result": "ok", "stall_count": stall_count,
                                     "element_count": len(elements_for_model),
+                                    "omitted_keepable": snap_stats.get("omitted_keepable", 0),
+                                    "raw_capped_frames": snap_stats.get("raw_capped_frames", 0),
                                     "elements_summary": [
                                         {
                                             "ref": e.get("ref"),
