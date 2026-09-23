@@ -53,17 +53,32 @@ def get_client(api_key: str | None = None):
     provider = os.environ.get("AI_PROVIDER", "anthropic").strip().lower()
 
     if provider == "bedrock":
-        if not (os.environ.get("AWS_ACCESS_KEY_ID") and os.environ.get("AWS_SECRET_ACCESS_KEY")):
+        # Any valid AWS credential source is acceptable here - explicit
+        # AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY env vars, OR an IAM role
+        # attached to this EC2 instance (the preferred, keyless option:
+        # short-lived, auto-rotating credentials fetched automatically from
+        # the instance metadata service, nothing to leak via env/history).
+        # Previously this only ever checked for explicit env vars, which
+        # would incorrectly refuse to run on an instance authenticating via
+        # an attached IAM role alone - boto3's default credential chain
+        # (used internally by AnthropicBedrock) already knows how to find
+        # both kinds, so ask it directly rather than re-implementing that
+        # check narrowly here.
+        import boto3
+        session = boto3.Session(region_name=BEDROCK_REGION)
+        creds = session.get_credentials()
+        if creds is None:
             # Fail loudly and immediately rather than silently falling back
             # to direct Anthropic (which would defeat the entire purpose of
             # this migration - a client relying on AU-only processing must
             # never be silently routed elsewhere) or raising a confusing
             # error deep inside the AnthropicBedrock/boto3 call stack.
             raise RuntimeError(
-                "AI_PROVIDER=bedrock is set, but AWS_ACCESS_KEY_ID and/or "
-                "AWS_SECRET_ACCESS_KEY are not configured. Refusing to fall "
-                "back to direct Anthropic for a request that expected "
-                "AU-only Bedrock routing."
+                "AI_PROVIDER=bedrock is set, but no AWS credentials could be "
+                "resolved (checked env vars, IAM role, and other standard "
+                "boto3 credential sources). Refusing to fall back to direct "
+                "Anthropic for a request that expected AU-only Bedrock "
+                "routing."
             )
         return AnthropicBedrock(aws_region=BEDROCK_REGION)
 
