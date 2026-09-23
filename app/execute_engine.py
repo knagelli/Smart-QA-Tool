@@ -56,6 +56,14 @@ MODEL = os.environ.get("QA_MODEL", "claude-sonnet-4-6")
 # case burning through the budget uselessly, so a higher cap mainly means
 # more headroom for real, correctly-progressing flows, not more time spent
 # on cases that were never going to finish anyway.
+# Feature flag for the navigation-guidance fix (2026-09-23) - see
+# claude/[pending]-navigation-discovery-fix.md for the design/council
+# writeup. Flip to False for an instant, code-free revert to the prior
+# system-prompt behavior if this regresses anything in production; the
+# .rollback-2026-09-23/ folder holds full pre-change file copies as a
+# second, independent fallback.
+ENABLE_NAV_DISCOVERY_V2 = True
+
 MAX_AGENT_STEPS = 60
 # If this many consecutive get_snapshot calls come back with the same URL
 # and the same set of visible element labels - i.e. nothing the agent did
@@ -583,6 +591,33 @@ TOOLS = [
 
 def _system_prompt(application: str, role_label: str, module: str, test_case: dict, fixture_role: str = "") -> str:
     fixture_instruction = ""
+    nav_instruction = ""
+    if ENABLE_NAV_DISCOVERY_V2:
+        nav_instruction = (
+            "\nFinding your way to a feature the test steps name (e.g. \"go to Incidents\", "
+            "\"open the Leave module\") is a navigation problem, not a search problem:\n"
+            "- Do NOT type a feature/module/record name into a general keyword-search box "
+            "(a search field that is not clearly part of a menu you already opened) as a way "
+            "of navigating there. A global content-search box returns search RESULTS, not a "
+            "navigation shortcut, and repeatedly retyping into it will not get you anywhere new "
+            "- if a snapshot looks unchanged after doing this, that is why; stop and try the "
+            "menu instead.\n"
+            "- Instead, look in the snapshot for an actual navigation trigger: a labeled menu/"
+            "nav element (e.g. \"All\", \"Menu\", \"Apps\", a hamburger icon, a sidebar/top-bar "
+            "icon, an avatar or profile icon that opens a dropdown/flyout). Click that first, "
+            "then look at the fresh snapshot it reveals for the specific module/feature named "
+            "in the test steps - clicking through a menu like this often takes more than one "
+            "step, which is expected.\n"
+            "- If element hints below already tell you exactly which control to use, prefer "
+            "that over guessing.\n"
+            "- Only fall back to a genuine keyword search box for navigation if you have tried "
+            "an actual menu/nav trigger and it did not contain what you need.\n"
+            "- While exploring a menu to find your way, do not click anything whose label means "
+            "signing out/ending the session (e.g. Log Out, Sign Out, End Session) or a "
+            "destructive/irreversible action (e.g. Delete, Remove, Terminate) unless a test step "
+            "explicitly calls for that action - if you're not sure whether a step calls for it, "
+            "treat it as it does not.\n"
+        )
     if fixture_role.startswith("creates:"):
         ftype = fixture_role.split(":", 1)[1]
         fixture_instruction = (
@@ -613,7 +648,7 @@ Rules:
 - After submitting a form, always take a fresh snapshot and check for an inline validation message (e.g. "should not exceed N characters", "already exists", "required") before deciding what to do next. If you see one, adapt the value you enter to satisfy it (e.g. shorten it, change it) - do not resubmit the exact same value again. If the same action fails validation twice in a row even after you've adapted the value, stop retrying it - call finish_test with FAIL or BLOCKED and quote the validation message in your notes, rather than repeating it for the rest of your available actions.
 - A toggle/switch control (e.g. "Create Login Details?", "Enabled") is often a checkbox styled to look like a switch. If you don't see an element that looks directly clickable for it, look for a label with that same wording in the snapshot and click that instead - clicking a field's label toggles it exactly like clicking the control itself. If you still can't find any way to change it after one such attempt, don't keep retrying the same snapshot - call finish_test with BLOCKED and say which control you couldn't operate.
 - If a step calls for attaching/uploading a file (e.g. "attach a supporting document", "upload a certificate"), use the upload_file tool on the ref of the attach/choose-file/upload control - do not try to click through to a native OS file dialog, and do not call finish_test with BLOCKED for a file-upload step; upload_file handles it.
-{fixture_instruction}"""
+{fixture_instruction}{nav_instruction}"""
 
 
 def execute_test_case(
