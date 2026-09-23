@@ -129,9 +129,31 @@ class EnvironmentUnreachableError(ExecutionError):
     pass
 
 
+# 2026-09-23: broadened after a real ServiceNow run left 3 test cases
+# BLOCKED - wait_for_text confirmed the text "All" was present and visible
+# somewhere on the page, but no element in any snapshot ever matched this
+# selector for it, so the agent never had a ref to click. The original
+# selector only covered elements that declare an explicit interactive
+# TAG or a well-known WAI-ARIA interactive ROLE. Many component
+# frameworks (ServiceNow's "Now Experience" custom elements included, but
+# this is common across Angular/React component libraries generally, not
+# ServiceNow-specific - kept here as a platform-agnostic heuristic per
+# this file's stated design principle, not a vendor-specific patch) mark
+# an element as keyboard-interactive purely via a `tabindex` attribute,
+# or use ARIA roles from the wider "composite widget" set (menuitem,
+# option, treeitem, ...) that the original list didn't include. Both
+# additions below are standard, well-established accessibility signals
+# for "this is something a user can act on" (the same signal set
+# accessibility-testing tools like axe-core use to define "focusable"),
+# not a guess at ServiceNow's specific markup - deliberately still
+# generic rather than hard-coding anything ServiceNow-shaped.
 INTERACTIVE_SELECTOR = (
-    'input, textarea, select, button, a[href], label, [role="button"], '
-    '[role="link"], [role="tab"], [role="checkbox"], [role="radio"], [role="switch"]'
+    'input, textarea, select, button, a[href], label, summary, '
+    '[tabindex]:not([tabindex="-1"]), '
+    '[role="button"], [role="link"], [role="tab"], [role="checkbox"], '
+    '[role="radio"], [role="switch"], [role="menuitem"], '
+    '[role="menuitemcheckbox"], [role="menuitemradio"], [role="option"], '
+    '[role="treeitem"], [role="gridcell"]'
 )
 
 # Per-element JS run via Locator.evaluate (the element itself is `el` -
@@ -907,7 +929,34 @@ def execute_test_case(
                                 )
                             step_log.append(f"Looked at the page ({page.url})")
                             if rl is not None:
-                                rl.event("step", {"step": step_num, "action": "get_snapshot", "target": page.url, "result": "ok", "stall_count": stall_count})
+                                # 2026-09-23: previously this event only recorded the
+                                # URL and stall_count - when 3 test cases later went
+                                # BLOCKED, the actual element list the agent was
+                                # working from at each step was gone, and the only way
+                                # to find out what was (or wasn't) clickable required a
+                                # brand-new live re-run against the real instance. That
+                                # is a bad position to be in for a customer-reported
+                                # BLOCKED result too - a customer shouldn't have to
+                                # reproduce a live run just so we can see what their
+                                # page looked like. Logging a compact per-element
+                                # summary (tag/role/label/frame, not the full snapshot
+                                # payload sent to the model) makes every future run
+                                # diagnosable from its own log alone.
+                                rl.event("step", {
+                                    "step": step_num, "action": "get_snapshot", "target": page.url,
+                                    "result": "ok", "stall_count": stall_count,
+                                    "element_count": len(elements_for_model),
+                                    "elements_summary": [
+                                        {
+                                            "ref": e.get("ref"),
+                                            "tag": e.get("tag"),
+                                            "role": e.get("role"),
+                                            "label": (e.get("label") or "")[:80],
+                                            "frame_url": e.get("frame_url"),
+                                        }
+                                        for e in elements_for_model
+                                    ],
+                                })
                         elif name == "fill_login":
                             loc_u = _element_locator(page, inp["username_ref"])
                             loc_p = _element_locator(page, inp["password_ref"])
