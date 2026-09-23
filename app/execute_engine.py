@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Optional
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+from anthropic import RateLimitError, PermissionDeniedError
 
 from . import ai_client
 from .run_logger import hash_bytes
@@ -75,6 +76,16 @@ STALL_LIMIT = 3
 NAV_TIMEOUT_MS = 20000
 ACTION_TIMEOUT_MS = 10000
 
+# Bounded retry for Bedrock/Anthropic rate-limit throttling (2026-09-23 -
+# root cause was an account-level Bedrock quota, not this code; see
+# claude/[pending]-bedrock-rate-limit-and-error-hardening-2026-09-23.md).
+# Kept deliberately short in total (well under 90s) per the council's
+# explicit pushback: a long-retrying test case ties up a slot in the
+# client's execution allowance without visible progress, which looks like
+# a hang even when it's "working as intended." This is a safety net for a
+# transient throttle, not a substitute for having enough quota headroom.
+RATE_LIMIT_BACKOFF_SECONDS = [2, 4, 8, 16, 30]  # 5 retries after the initial attempt (6 total tries), ~60s of sleep
+
 # Any interactive element whose visible label, name, id, or placeholder
 # matches one of these (case-insensitive substring) gets masked (blacked
 # out) in every screenshot it appears in - not only the screenshot taken
@@ -97,6 +108,27 @@ class ExecutionError(Exception):
     pass
 
 
+class EnvironmentUnreachableError(ExecutionError):
+    """Raised specifically when the client's own env_url didn't respond in
+    time (2026-09-23 - see claude/[pending]-bedrock-rate-limit-and-error-
+    hardening-2026-09-23.md for why this needed splitting out). Distinct
+    from the base ExecutionError - which now means "our own automation/AI
+    infrastructure broke" - because these two have OPPOSITE fault
+    attribution and should be treated differently by the caller:
+    - This one is plausibly the client's own environment being down or a
+      wrong URL, not our fault - it should keep its original, specific,
+      actionable message (not get replaced by a generic one) and should
+      still count against the client's execution allowance, exactly as it
+      always did.
+    - The base ExecutionError (rate limit exhausted, permission denied,
+      browser crash, anything unexpected) is unambiguously our fault, and
+      main.py exempts it from the client's execution allowance.
+    A caller distinguishes these via isinstance/except-ordering, not by
+    matching on message text - matching strings is fragile and was
+    explicitly rejected during this fix's review for exactly that reason."""
+    pass
+
+
 INTERACTIVE_SELECTOR = (
     'input, textarea, select, button, a[href], label, [role="button"], '
     '[role="link"], [role="tab"], [role="checkbox"], [role="radio"], [role="switch"]'
@@ -104,6 +136,26 @@ INTERACTIVE_SELECTOR = (
 
 # Per-element JS run via Locator.evaluate (the element itself is `el` -
 # no querySelectorAll here, see the shadow-DOM note on _snapshot_elements).
+#
+# value_hash (2026-09-23): a cheap, one-way, in-browser hash of the
+# element's current value/checked state - added specifically to fix a
+# confirmed stall-detection false positive (see
+# claude/[pending]-bedrock-rate-limit-and-error-hardening-2026-09-23.md
+# for the reproduction). _snapshot_fingerprint below used to key only on
+# tag/role/label, and label is normally sourced from a STATIC attribute
+# (placeholder/name/aria-label), not from the element's current value - so
+# typing into several fields in a row, or toggling a checkbox, could look
+# byte-for-byte identical across consecutive snapshots even though the
+# agent made real progress, incorrectly tripping STALL_LIMIT. Verified by
+# direct reproduction against this exact function (3 consecutive field
+# fills -> stall_count reached STALL_LIMIT before this fix; 0 after).
+# Deliberately never returns the actual text - only a non-reversible
+# integer - so this cannot leak typed content (including credentials,
+# though those are never typed via this path - see fill_login) into
+# Python, logs, or reports. Scoped ONLY to input/textarea/select/
+# checkbox/radio - not folded into every attribute, so a page with
+# unrelated cosmetic dynamism (a rotating banner, a live clock) still
+# correctly registers as "unchanged" for stall-detection purposes.
 _ELEMENT_INFO_JS = """
 (el) => {
     const rect = el.getBoundingClientRect();
@@ -118,12 +170,25 @@ _ELEMENT_INFO_JS = """
         el.value ||
         el.id || ''
     ).trim().slice(0, 80);
+    const tag = el.tagName.toLowerCase();
+    const itype = (el.getAttribute('type') || '').toLowerCase();
+    let value_hash = 0;
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') {
+        const v = el.value || '';
+        for (let i = 0; i < v.length; i++) {
+            value_hash = ((value_hash << 5) - value_hash + v.charCodeAt(i)) | 0;
+        }
+    }
+    if (itype === 'checkbox' || itype === 'radio') {
+        value_hash = value_hash * 31 + (el.checked ? 1 : 0);
+    }
     return {
-        tag: el.tagName.toLowerCase(),
-        type: el.getAttribute('type') || '',
+        tag: tag,
+        type: itype,
         role: el.getAttribute('role') || '',
-        label: label || (el.tagName.toLowerCase() === 'input' && el.getAttribute('type') === 'file' ? 'File upload' : ''),
+        label: label || (tag === 'input' && itype === 'file' ? 'File upload' : ''),
         visible: visible,
+        value_hash: value_hash,
     };
 }
 """
@@ -316,8 +381,14 @@ def _snapshot_fingerprint(page, elements: list) -> tuple:
     ServiceNow's Polaris pattern) is still caught, because the elements
     tuple itself changes when the iframe's content changes - the URL half
     of this signature was never doing the real work of stall detection,
-    the element tuple was."""
-    return (page.url, tuple((e["tag"], e["role"], e["label"]) for e in elements))
+    the element tuple was.
+
+    value_hash (2026-09-23) is now part of this signature too - see the
+    _ELEMENT_INFO_JS docstring note above for the confirmed false-positive
+    this closes (typing into a field, or toggling a checkbox/radio, no
+    longer looks identical to the previous snapshot just because the
+    element's static label didn't change)."""
+    return (page.url, tuple((e["tag"], e["role"], e["label"], e.get("value_hash", 0)) for e in elements))
 
 
 def _element_locator(page, ref: int):
@@ -720,7 +791,10 @@ def execute_test_case(
                 page.goto(env_url, timeout=NAV_TIMEOUT_MS, wait_until="domcontentloaded")
             except PlaywrightTimeoutError as e:
                 browser.close()
-                raise ExecutionError(f"Could not reach the environment URL in time.") from e
+                raise EnvironmentUnreachableError(
+                    "Could not reach the environment URL in time. Please confirm the "
+                    "sandbox/UAT environment is running and the URL is correct, then try again."
+                ) from e
 
             screenshots.append(_capture_screenshot(page, shots_dir, "start", rl=rl, step_num=0))
             verdict, notes = None, ""
@@ -732,20 +806,57 @@ def execute_test_case(
             attachment_path: list = [None]
 
             for step_num in range(MAX_AGENT_STEPS):
-                response = client.messages.create(
-                    model=ai_client.get_model_id(),
-                    max_tokens=1024,
-                    # cache_control on the system block: the per-application
-                    # system prompt is identical across every step of a test
-                    # case (and often across test cases for the same app), so
-                    # caching it here plus the tools list above means only
-                    # the growing conversation history is billed at full
-                    # input price - the static prefix is billed once per
-                    # 5-minute cache window and read back at ~10% cost after.
-                    system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
-                    tools=TOOLS,
-                    messages=messages,
-                )
+                # Rate-limit retry + distinct IAM/permission diagnostics
+                # (2026-09-23) - see claude/[pending]-bedrock-rate-limit-
+                # and-error-hardening-2026-09-23.md. Root cause of today's
+                # incident was an account-level Bedrock quota (fixed via an
+                # AWS quota increase, not code), but the SDK's own built-in
+                # retry (2 attempts, well under 2s total backoff) is too
+                # thin for genuine per-minute throttling - this gives a
+                # transient throttle a real chance to clear before failing
+                # the whole test case. PermissionDeniedError is NOT
+                # retried (a permission problem doesn't get better by
+                # waiting) - it's re-raised immediately with a message that
+                # names the likely cause, so a future IAM/model-ID mismatch
+                # (the exact defect this session spent significant time
+                # diagnosing from a bare 403 traceback) is diagnosable in
+                # seconds from the log, not by re-deriving it from scratch.
+                for attempt, backoff in enumerate([0] + RATE_LIMIT_BACKOFF_SECONDS):
+                    if backoff:
+                        time.sleep(backoff)
+                    try:
+                        response = client.messages.create(
+                            model=ai_client.get_model_id(),
+                            max_tokens=1024,
+                            # cache_control on the system block: the per-application
+                            # system prompt is identical across every step of a test
+                            # case (and often across test cases for the same app), so
+                            # caching it here plus the tools list above means only
+                            # the growing conversation history is billed at full
+                            # input price - the static prefix is billed once per
+                            # 5-minute cache window and read back at ~10% cost after.
+                            system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
+                            tools=TOOLS,
+                            messages=messages,
+                        )
+                        break
+                    except PermissionDeniedError as e:
+                        logger.error(
+                            "Bedrock/Anthropic permission denied - likely an IAM policy or "
+                            "model-ID mismatch (check the inference-profile ARN this app is "
+                            "configured with against what the attached IAM role actually "
+                            "permits): %s", e,
+                        )
+                        raise
+                    except RateLimitError:
+                        if attempt == len(RATE_LIMIT_BACKOFF_SECONDS):
+                            raise
+                        if rl is not None:
+                            rl.event("warning", {
+                                "step": step_num, "message": "rate limited, retrying",
+                                "attempt": attempt + 1, "next_backoff_s": RATE_LIMIT_BACKOFF_SECONDS[attempt],
+                            })
+                        continue
                 messages.append({"role": "assistant", "content": response.content})
 
                 tool_uses = [b for b in response.content if b.type == "tool_use"]
@@ -767,8 +878,21 @@ def execute_test_case(
                             else:
                                 stall_count = 0
                             last_fingerprint = fingerprint
+                            # value_hash is internal-only bookkeeping for stall
+                            # detection (see _ELEMENT_INFO_JS/_snapshot_fingerprint) -
+                            # it must never be sent to the model: it's meaningless to
+                            # the agent's reasoning, and since conversation history
+                            # (unlike the system prompt/tools list) isn't under a
+                            # prompt-cache breakpoint, leaving it in would silently
+                            # inflate billed input tokens on every subsequent call
+                            # for the rest of the test case, for every element, on
+                            # every single snapshot. Strip it here, after it's
+                            # already been used for the fingerprint above.
+                            elements_for_model = [
+                                {k: v for k, v in e.items() if k != "value_hash"} for e in elements
+                            ]
                             result_payload = {
-                                "url": page.url, "title": page.title(), "elements": elements,
+                                "url": page.url, "title": page.title(), "elements": elements_for_model,
                                 "steps_remaining": MAX_AGENT_STEPS - step_num - 1,
                             }
                             if stall_count > 0:

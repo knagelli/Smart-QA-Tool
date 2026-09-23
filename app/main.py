@@ -64,7 +64,7 @@ from .report_builder import build_html, build_xlsx, build_html_custom, build_xls
 from . import req_history
 from . import test_case_history
 from .diagram_parser import parse_flow_diagrams
-from .execute_engine import execute_test_case, ExecutionError
+from .execute_engine import execute_test_case, ExecutionError, EnvironmentUnreachableError
 from .execution_report import build_execution_report
 from .import_parser import try_parse_tabular
 from . import run_logger
@@ -2507,19 +2507,80 @@ async def _run_execution_batch_impl(
                     {"run_id": run_id, "exec_id": exec_id, "tc_id": tc_id},
                 )
                 run_fixtures[role[1]] = saved
-        except ExecutionError as e:
-            ref = _log_and_ref(e, f"execute_test_case ExecutionError for {tc_id} in /execute")
+        except EnvironmentUnreachableError as e:
+            # 2026-09-23 (see claude/[pending]-bedrock-rate-limit-and-error-
+            # hardening-2026-09-23.md): split out from the base ExecutionError
+            # branch below after review found the original one-size-fits-all
+            # version had two problems at once - (1) it replaced this case's
+            # already-clear, actionable message ("could not reach your
+            # environment - check the URL and that it's running") with a
+            # fully generic one, which is a real loss of useful information
+            # for the client, and (2) it exempted this from the client's
+            # execution allowance alongside genuine infrastructure faults,
+            # even though an unreachable client-supplied URL is plausibly the
+            # CLIENT's own environment/configuration issue, not ours -
+            # exempting it unconditionally would let a client repeatedly
+            # "test" against a broken or wrong URL for free. So: this keeps
+            # its own specific message as-is, and DOES still count against
+            # the client's execution allowance (no infra_fault flag) -
+            # exactly as it always did before today's changes. Caught via
+            # isinstance (this except clause, ordered before the base
+            # ExecutionError one below) rather than matching on message
+            # text, which would be fragile.
+            ref = _log_and_ref(e, f"execute_test_case EnvironmentUnreachableError for {tc_id} in /execute")
             rl.finish("blocked", {"correlation_ref": ref, "error": str(e)})
             results_by_tc[tc_id] = {
                 "tc_id": tc_id, "title": tc.get("title", ""), "verdict": "BLOCKED",
                 "notes": f"Could not complete this test case: {e}", "step_log": [], "screenshots": [],
             }
-        except Exception as e:
-            ref = _log_and_ref(e, f"execute_test_case failed for {tc_id} in /execute")
-            rl.finish("blocked", {"correlation_ref": ref, "error": type(e).__name__})
+        except ExecutionError as e:
+            # 2026-09-23 hardening (see claude/[pending]-bedrock-rate-limit-
+            # and-error-hardening-2026-09-23.md): this branch used to put
+            # the raw exception - including bare Python exception class
+            # names like "RateLimitError" - directly into the client-facing
+            # report (confirmed today: a real client-visible report showed
+            # "Browser automation failed: RateLimitError" verbatim). Now
+            # routed through the same _log_and_ref + GENERIC_ERROR_MESSAGE
+            # pattern already used one branch below for the bare-Exception
+            # case, so the client always sees a clean, plain-language
+            # message with a correlation ref, and the full exception detail
+            # stays in the internal log only.
+            #
+            # infra_fault=True (2026-09-23): after the EnvironmentUnreachableError
+            # split above, everything that still reaches this branch is
+            # unambiguously OUR fault - a Bedrock rate limit even after
+            # retries, a permission/IAM error, a browser crash, or anything
+            # else unexpected in the automation layer - never a case where
+            # the AI made a judgment call and reported a genuine BLOCKED
+            # verdict via finish_test (that path returns normally, with its
+            # own verdict, and never reaches this except clause at all), and
+            # never the client's own environment being unreachable (that's
+            # the branch above now). So this flag is narrowly and explicitly
+            # scoped, not "any exception" - see client_quotas.reconcile_execution's
+            # caller below, which excludes infra_fault results from what
+            # counts as consumed execution allowance. Confirmed today: a
+            # client's paid allowance was debited for a test that never got
+            # a fair run due to our own Bedrock throttling - this is what
+            # stops that from recurring, without also giving away free
+            # attempts for a client's own broken URL.
+            ref = _log_and_ref(e, f"execute_test_case ExecutionError for {tc_id} in /execute")
+            rl.finish("blocked", {"correlation_ref": ref, "error": str(e), "infra_fault": True})
             results_by_tc[tc_id] = {
                 "tc_id": tc_id, "title": tc.get("title", ""), "verdict": "BLOCKED",
-                "notes": GENERIC_ERROR_MESSAGE.format(ref=ref), "step_log": [], "screenshots": [],
+                "notes": GENERIC_ERROR_MESSAGE.format(ref=ref) + " (This attempt was not counted against your execution allowance.)",
+                "step_log": [], "screenshots": [], "infra_fault": True,
+            }
+        except Exception as e:
+            # Same infra_fault reasoning as the ExecutionError branch above -
+            # if execute_test_case itself raises something unexpected that
+            # isn't even wrapped as ExecutionError, that's even more clearly
+            # our bug, not the client's fault.
+            ref = _log_and_ref(e, f"execute_test_case failed for {tc_id} in /execute")
+            rl.finish("blocked", {"correlation_ref": ref, "error": type(e).__name__, "infra_fault": True})
+            results_by_tc[tc_id] = {
+                "tc_id": tc_id, "title": tc.get("title", ""), "verdict": "BLOCKED",
+                "notes": GENERIC_ERROR_MESSAGE.format(ref=ref) + " (This attempt was not counted against your execution allowance.)",
+                "step_log": [], "screenshots": [], "infra_fault": True,
             }
         _push_status()
     # Credentials go out of scope here and are never referenced again in this
@@ -2570,7 +2631,14 @@ async def _run_execution_batch_impl(
             "download_token": exec_token, "hide_trial_cta": True, **summary_counts,
         },
     })
-    return len(results)
+    # 2026-09-23: only count results that got a genuine attempt toward the
+    # client's execution allowance - see the infra_fault reasoning on the
+    # ExecutionError/Exception branches above. This return value is what
+    # reconcile_execution's `actual_count` reconciles the earlier
+    # reserve_execution() reservation down to, so an infra-fault result
+    # (never a real, fair attempt) now correctly releases its slot back to
+    # the client instead of permanently consuming it.
+    return len([r for r in results if not r.get("infra_fault")])
 
 
 @app.get("/download-exec/{run_id}/{exec_id}/{subpath:path}")
