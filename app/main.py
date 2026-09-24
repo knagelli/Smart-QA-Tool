@@ -2490,7 +2490,7 @@ async def _run_execution_batch_impl(
                 "screenshots": [f"{shots_dir.name}/{fn}" for fn in outcome["screenshots"]],
                 "evidence": outcome.get("evidence"),
             }
-            rl.finish(outcome["verdict"].lower(), {"notes": notes, "step_count": len(outcome["step_log"])})
+            rl.finish(outcome["verdict"].lower(), {"notes": outcome.get("notes_for_log", outcome["notes"]) + fixture_note, "step_count": len(outcome["step_log"])})
 
             # This scenario's job was to create a reusable record, and it
             # passed with the agent reporting what it created - save it for

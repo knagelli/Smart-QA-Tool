@@ -89,6 +89,9 @@ STALL_LIMIT = 3
 # Flip ENABLE_PASS_REVIEW to False for an instant code-free revert.
 ENABLE_PASS_REVIEW = True
 PASS_REVIEW_EXTRA_STEPS = 8
+# One-time extra budget when a final PASS is re-checked because the form
+# changed after the review (see Fix 3 in execute_test_case).
+PASS_RECHECK_EXTRA_STEPS = 4
 # Evidence table limits: never capture more than this many fields, or more
 # than this many characters of any one value.
 EVIDENCE_MAX_FIELDS = 60
@@ -222,7 +225,12 @@ _ELEMENT_INFO_JS = """
         el.getAttribute('placeholder') ||
         el.getAttribute('name') ||
         el.innerText ||
-        (itype === 'password' ? '' : el.value) ||
+        // 2026-09-24: a field's typed value is no longer used as its label
+        // (it leaked whatever was typed - tokens, names - into the run log).
+        // Values now travel separately in 'value' (masked in Python). Only
+        // button-type inputs keep it, since there the value IS the caption.
+        (['submit', 'button', 'reset'].includes(itype) ? el.value : '') ||
+        ((tag === 'input' || tag === 'textarea' || tag === 'select') && el.labels && el.labels.length ? el.labels[0].innerText : '') ||
         el.id || (itype === 'password' ? 'Password' : '')
     ).trim().slice(0, 80);
     let value_hash = 0;
@@ -235,6 +243,30 @@ _ELEMENT_INFO_JS = """
     if (itype === 'checkbox' || itype === 'radio') {
         value_hash = value_hash * 31 + (el.checked ? 1 : 0);
     }
+    // 2026-09-24 (TC-002 false PASS): the agent could not see a field's
+    // current value, so it could not tell that its typing into a supposedly
+    // read-only field had been accepted. Current value (select -> visible
+    // option text) and read-only state are now read here. Password, hidden
+    // and file inputs are never read. Python masks sensitive labels before
+    // the model sees it, and the run log never carries it.
+    let value = null;
+    if (tag === 'select') {
+        const o = el.options[el.selectedIndex]; value = o ? o.text : '';
+    } else if (itype === 'checkbox' || itype === 'radio') {
+        value = el.checked ? 'checked' : 'unchecked';
+    } else if ((tag === 'input' && !['password', 'hidden', 'file', 'submit', 'button', 'reset', 'image'].includes(itype)) || tag === 'textarea') {
+        value = el.value || '';
+    }
+    let field_label = '';
+    try {
+        if (el.labels && el.labels.length) field_label = el.labels[0].innerText;
+        if (!field_label && el.getAttribute('aria-labelledby')) {
+            field_label = el.getAttribute('aria-labelledby').split(/\s+/)
+                .map(id => { const n = document.getElementById(id); return n ? n.innerText : ''; }).join(' ');
+        }
+    } catch (e) {}
+    field_label = (field_label || '').replace(/\s+/g, ' ').replace(/^[*\s]+/, '').trim().slice(0, 80);
+    const readonly = !!(el.readOnly || el.disabled || el.getAttribute('aria-readonly') === 'true' || el.getAttribute('aria-disabled') === 'true');
     return {
         tag: tag,
         type: itype,
@@ -242,6 +274,9 @@ _ELEMENT_INFO_JS = """
         label: label || (tag === 'input' && itype === 'file' ? 'File upload' : ''),
         visible: visible,
         value_hash: value_hash,
+        value: value,
+        readonly: readonly,
+        field_label: field_label,
     };
 }
 """
@@ -605,6 +640,75 @@ def _capture_form_state(page) -> list:
             if len(fields) >= EVIDENCE_MAX_FIELDS:
                 return fields
     return fields
+
+
+# A <label> targeted by type_text/select_option is retargeted by Playwright
+# to its control; read-back and the read-only check must follow it too
+# (found by the TC-002 synthetic test: evaluating the label itself returned
+# no value and readonly=false, so both checks silently did nothing).
+_CONTROL_INFO_JS = (
+    "(el) => { const t = (el.tagName === 'LABEL' && el.control) ? el.control : el; return ("
+    + _ELEMENT_INFO_JS.strip() + ")(t); }"
+)
+
+
+def _safe_value_for_model(label: str, value) -> Optional[str]:
+    """Same masking rules as the evidence table (_capture_form_state)."""
+    if value is None:
+        return None
+    low = (label or "").lower()
+    if _is_critical_label(label) or any(k in low for k in EVIDENCE_SENSITIVE_KEYWORDS):
+        return "[hidden - sensitive field]"
+    value = str(value)
+    return value[:EVIDENCE_MAX_VALUE_CHARS] + "..." if len(value) > EVIDENCE_MAX_VALUE_CHARS else value
+
+
+def _elements_for_model(elements: list) -> list:
+    """Strip internal bookkeeping and mask values before the model sees a
+    snapshot. value/readonly are only included when meaningful, to keep the
+    per-step token cost down (most elements are buttons/links with neither)."""
+    out = []
+    for e in elements:
+        m = {k: v for k, v in e.items() if k not in ("value_hash", "value", "readonly", "field_label")}
+        fl = e.get("field_label") or ""
+        if fl and fl != e.get("label"):
+            # e.g. label "incident.number" (from name=) -> field_label "Number"
+            m["field_label"] = fl
+        v = _safe_value_for_model((e.get("label", "") + " " + fl).strip(), e.get("value"))
+        if v is not None:
+            m["value"] = v if v != "" else "(empty)"
+        if e.get("readonly"):
+            m["readonly"] = True
+        out.append(m)
+    return out
+
+
+def _read_back_value(loc, label: str) -> Optional[str]:
+    """Fix 1 (TC-002): after typing/selecting, report what the field
+    actually contains now, so the agent can't assume an edit was rejected
+    (or accepted) without evidence. Never raises."""
+    try:
+        info = loc.evaluate(_CONTROL_INFO_JS)
+        return _safe_value_for_model(" ".join(x for x in (label, info.get("label", ""), info.get("field_label", "")) if x), info.get("value"))
+    except Exception:
+        return None
+
+
+def _form_diff(before: list, after: list) -> list:
+    """Fields whose value differs between two _capture_form_state results,
+    matched by label and position among same-label fields."""
+    def keyed(rows):
+        seen, out = {}, {}
+        for r in rows:
+            n = seen.get(r["label"], 0); seen[r["label"]] = n + 1
+            out[(r["label"], n)] = r["value"]
+        return out
+    b, a = keyed(before), keyed(after)
+    changes = []
+    for k in list(b.keys()) + [k for k in a if k not in b]:
+        if b.get(k) != a.get(k):
+            changes.append({"field": k[0], "value_when_you_were_shown_it": b.get(k, "(not present)"), "value_now": a.get(k, "(not present)")})
+    return changes
 
 
 def _pass_review_message(test_case: dict, form_fields: list) -> dict:
@@ -1024,6 +1128,7 @@ def execute_test_case(
 
             screenshots.append(_capture_screenshot(page, shots_dir, "start", rl=rl, step_num=0))
             verdict, notes = None, ""
+            notes_for_log = None
             last_fingerprint = None
             stall_count = 0
             # Lazily created on the first upload_file call and reused for
@@ -1036,6 +1141,14 @@ def execute_test_case(
             pass_review_done = False
             pass_review_step = None
             first_pass_notes = None
+            # Fix 3 (TC-002, 2026-09-24): the evidence shown at the first PASS
+            # can go stale if the agent keeps acting afterwards (in TC-002 it
+            # typed "EDITED" into Number AFTER being shown Number=INC0010006,
+            # then PASSed claiming nothing changed). The harness - not the
+            # model - now diffs the live form against what was last shown.
+            last_shown_fields = None
+            pass_recheck_done = False
+            recheck_changes = []
 
             for step_num in range(MAX_AGENT_STEPS + PASS_REVIEW_EXTRA_STEPS):
                 if step_num >= step_limit:
@@ -1123,9 +1236,7 @@ def execute_test_case(
                             # for the rest of the test case, for every element, on
                             # every single snapshot. Strip it here, after it's
                             # already been used for the fingerprint above.
-                            elements_for_model = [
-                                {k: v for k, v in e.items() if k != "value_hash"} for e in elements
-                            ]
+                            elements_for_model = _elements_for_model(elements)
                             result_payload = {
                                 "url": page.url, "title": page.title(), "elements": elements_for_model,
                                 "steps_remaining": step_limit - step_num - 1,
@@ -1229,8 +1340,22 @@ def execute_test_case(
                             screenshots.append(_capture_screenshot(page, shots_dir, f"after_click_{step_num}", rl=rl, step_num=step_num))
                         elif name == "type_text":
                             loc = _element_locator(page, inp["ref"])
-                            loc.fill(inp["text"])
-                            result_payload = {"ok": True}
+                            try:
+                                pre = loc.evaluate(_CONTROL_INFO_JS)
+                            except Exception:
+                                pre = {}
+                            if pre.get("readonly"):
+                                # Explicit, instant answer for "try to edit a read-only
+                                # field" steps - previously fill() waited out the full
+                                # action timeout and returned a vague TimeoutError.
+                                result_payload = {
+                                    "ok": False, "field_is_readonly": True,
+                                    "value_now": _safe_value_for_model(pre.get("label", "") + " " + pre.get("field_label", ""), pre.get("value")),
+                                    "note": "The field is read-only/disabled; nothing was typed.",
+                                }
+                            else:
+                                loc.fill(inp["text"])
+                                result_payload = {"ok": True, "value_now": _read_back_value(loc, pre.get("field_label", ""))}
                             step_log.append("Entered text into a field")
                             if rl is not None:
                                 # action-type redaction: never log inp["text"], regardless
@@ -1243,7 +1368,7 @@ def execute_test_case(
                                 loc.select_option(label=inp["value"])
                             except Exception:
                                 loc.select_option(inp["value"])
-                            result_payload = {"ok": True}
+                            result_payload = {"ok": True, "value_now": _read_back_value(loc, "")}
                             step_log.append(f"Selected an option: {inp['value']}")
                             if rl is not None:
                                 rl.event("step", {"step": step_num, "action": "select_option", "target": f"field ref {inp['ref']}", "value": inp["value"], "result": "ok"})
@@ -1332,6 +1457,7 @@ def execute_test_case(
                             first_pass_notes = inp.get("notes", "")
                             step_limit = max(step_limit, step_num + 1 + PASS_REVIEW_EXTRA_STEPS)
                             form_fields = _capture_form_state(page)
+                            last_shown_fields = form_fields
                             result_payload = _pass_review_message(test_case, form_fields)
                             step_log.append("Asked to re-check the PASS against the original steps and the live form")
                             if rl is not None:
@@ -1342,9 +1468,52 @@ def execute_test_case(
                                     "new_step_limit": step_limit,
                                     "fields": [{"label": f["label"], "filled": f["value"] != "(empty)"} for f in form_fields],
                                 })
+                        elif (name == "finish_test" and ENABLE_PASS_REVIEW and inp.get("verdict") == "PASS"
+                              and pass_review_done and not pass_recheck_done and last_shown_fields is not None
+                              and _form_diff(last_shown_fields, _capture_form_state(page))):
+                            # The form changed after the agent was last shown it -
+                            # show exactly what changed, once, before accepting PASS.
+                            now_fields = _capture_form_state(page)
+                            recheck_changes = _form_diff(last_shown_fields, now_fields)
+                            last_shown_fields = now_fields
+                            pass_recheck_done = True
+                            step_limit = max(step_limit, step_num + 1 + PASS_RECHECK_EXTRA_STEPS)
+                            result_payload = {
+                                "ok": False, "recheck_required": True,
+                                "message": (
+                                    "PASS not accepted yet: these form fields CHANGED after you were shown the "
+                                    "form (values read directly from the page by the harness, not from memory). "
+                                    "Check each change against the original steps and expected result. If a change "
+                                    "means a step or expected result was NOT met (e.g. a field that should be "
+                                    "read-only accepted an edit), call finish_test with FAIL and say so. Your next "
+                                    "finish_test is final; if you still call PASS, these changes will be listed in "
+                                    "the report next to your verdict."
+                                ),
+                                "changed_fields": recheck_changes,
+                                "original_steps": test_case.get("steps", ""),
+                                "original_expected_result": test_case.get("expected_result", ""),
+                            }
+                            step_log.append("Asked to re-check a PASS because form fields changed after the review")
+                            if rl is not None:
+                                # Field names only - values never go to the run log.
+                                rl.event("step", {"step": step_num, "action": "pass_recheck",
+                                                  "changed_fields": [c["field"] for c in recheck_changes]})
                         elif name == "finish_test":
                             verdict = inp["verdict"]
                             notes = inp["notes"]
+                            notes_for_log = notes
+                            if verdict == "PASS" and pass_review_done and last_shown_fields is not None:
+                                # Anything that changed and was PASSed over - including
+                                # changes already shown at the recheck - is recorded
+                                # next to the verdict so a false PASS can't look clean.
+                                late = _form_diff(last_shown_fields, _capture_form_state(page))
+                                flagged = recheck_changes + late
+                                if flagged:
+                                    notes += "\n\n[req2qa harness note: after the PASS review these form fields changed, and the agent then confirmed PASS - " + "; ".join(
+                                        f"{c['field']}: '{c['value_when_you_were_shown_it']}' -> '{c['value_now']}'" for c in flagged
+                                    ) + ". Check these values match the test steps.]"
+                                    notes_for_log += "\n\n[req2qa harness note: fields changed after PASS review: " + ", ".join(
+                                        c["field"] for c in flagged) + "]"
                             if verdict == "PASS" and isinstance(inp.get("created_entity"), dict):
                                 created_entity = inp["created_entity"]
                             result_payload = {"ok": True}
@@ -1354,7 +1523,7 @@ def execute_test_case(
                                 # generated (e.g. an auto-test employee name) - never a
                                 # real person's data or a credential - safe to log for
                                 # troubleshooting, same as notes/verdict above.
-                                rl.event("step", {"step": step_num, "action": "finish_test", "verdict": verdict, "notes": notes, "created_entity": created_entity})
+                                rl.event("step", {"step": step_num, "action": "finish_test", "verdict": verdict, "notes": notes_for_log, "created_entity": created_entity})
                         else:
                             result_payload = {"error": f"Unknown tool {name}"}
                     except Exception as e:
@@ -1425,6 +1594,8 @@ def execute_test_case(
     return {
         "verdict": verdict or "BLOCKED",
         "notes": notes or "No verdict was reached.",
+        # Same as notes, minus any field values the harness appended (run-log copy).
+        "notes_for_log": notes_for_log if notes_for_log is not None else (notes or "No verdict was reached."),
         "step_log": step_log,
         "screenshots": screenshots,
         "created_entity": created_entity,
