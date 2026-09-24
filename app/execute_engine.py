@@ -141,6 +141,17 @@ HISTORY_KEEP_SNAPSHOTS = _env_int("REQ2QA_HISTORY_KEEP_SNAPSHOTS", 2)
 # account's Bedrock tokens-per-minute quota for the model in use.
 TPM_BUDGET = _env_int("REQ2QA_TPM_BUDGET", 0)
 TPM_MAX_WAIT_SECONDS = 90
+# Return the updated page with the last page-changing action of each model
+# turn, instead of the agent spending a separate request on get_snapshot.
+# Roughly halves model requests per test case - which is what the Bedrock
+# requests-per-minute quota counts. REQ2QA_PAGE_AFTER_ACTION=0 reverts.
+PAGE_AFTER_ACTION = _env_flag("REQ2QA_PAGE_AFTER_ACTION", True)
+_PAGE_CHANGING_TOOLS = ("click", "type_text", "select_option", "upload_file")
+# Pause before that read-back so values that resolve a moment after the
+# action (e.g. ServiceNow's Caller lookup filling in the display name) are
+# already on the page. Found in the round-2 review: without it the returned
+# page could be staler than the separate snapshot the agent used to take.
+PAGE_AFTER_ACTION_SETTLE_MS = _env_int("REQ2QA_PAGE_AFTER_ACTION_SETTLE_MS", 700)
 # Rough size of the fixed tools list in tokens, added to pacing estimates.
 TOOLS_TOKEN_ESTIMATE = 2500
 CLAUSE_EVIDENCE_MAX_REJECTIONS = 2
@@ -775,8 +786,11 @@ def _snapshot_stub(payload: dict) -> str:
         filled.append(f"{str(name)[:40]}: {str(v)[:60]}")
         if len(filled) >= 30:
             break
+    action_result = {k: v for k, v in payload.items()
+                     if k not in ("url", "title", "elements", "frames", "steps_remaining", "truncated", "warning")}
     return json.dumps({
         "older_snapshot_omitted": True,
+        **({"action_result": action_result} if action_result else {}),
         "url": str(payload.get("url", ""))[:200],
         "title": str(payload.get("title", ""))[:120],
         "element_count": len(payload.get("elements", []) or []),
@@ -1167,7 +1181,7 @@ def _generate_attachment_file(dest_path: Path, file_type: str) -> None:
 TOOLS = [
     {
         "name": "get_snapshot",
-        "description": "Get the current page's interactive elements (buttons, fields, links) with a ref number for each, plus the page title and URL. Call this whenever you need to see what's on screen, including right after any navigation or action.",
+        "description": "Get the current page's interactive elements (buttons, fields, links) with a ref number for each, plus the page title and URL. Call it at the start of the test, or to re-check a page without acting on it. Note: every click / type_text / select_option / upload_file already returns the updated page (url, elements, values) in its result, so you normally only need get_snapshot at the start of a test or to re-check a page without acting on it.",
         "input_schema": {"type": "object", "properties": {}},
     },
     {
@@ -1329,6 +1343,7 @@ Rules:
 - If you land on a screen that looks like a single sign-on redirect, an MFA/one-time-code prompt, or anything else you cannot complete with the tools available, call finish_test with verdict BLOCKED and explain what you saw - do not guess or force through it.
 - Carry out the test steps exactly as written against the real UI. If the UI doesn't match what the steps describe, use your judgement to find the equivalent control, but call finish_test with FAIL (not BLOCKED) if the expected result genuinely does not occur.
 - Call finish_test as soon as you have a clear verdict. Do not keep exploring after that.
+- Each page-changing action (click, type_text, select_option, upload_file) returns the updated page in its result - read it there instead of calling get_snapshot again. Each extra request slows the run.
 - Verdicts must rest on what you OBSERVED, never on assumptions. If the test's precondition cannot be met in this environment (e.g. it requires a different user role than the one you are logged in as, or data that does not exist), call finish_test with BLOCKED and name the unmet precondition - never PASS by reasoning about how the system "would" behave for a different role or setup.
 - If you use a different control or method than the steps specify (e.g. type-ahead instead of a lookup popup), say so in your notes. That step only counts as met if your substitute exercises the same behavior the step is testing; otherwise the verdict cannot be PASS.
 - For PASS, fill clause_evidence: one entry per clause of the expected result, each with what you actually observed. A clause you did not directly observe is 'not_checked', and then the verdict is not PASS. Dropdowns in the snapshot list their options - use those to verify option lists rather than trial-and-error selection.
@@ -1377,7 +1392,8 @@ def execute_test_case(
     raises is swallowed so a status-tracking bug can never break a live run.
     """
     shots_dir.mkdir(parents=True, exist_ok=True)
-    client = ai_client.get_client(api_key)
+    # Test execution is background work: generation (a person waiting) goes first.
+    client = ai_client.get_client(api_key, priority="background")
     step_log = []
     screenshots = []
     created_entity = None
@@ -1431,6 +1447,113 @@ def execute_test_case(
             tc_text = " ".join(str(test_case.get(k, "")) for k in ("title", "precondition", "steps", "expected_result"))
             accepted_clause_evidence = None
 
+            attempts_since_snapshot = 0   # actions taken since the last page read
+            relook_count = 0              # consecutive page reads with no action in between
+
+            def take_snapshot(source: str = "get_snapshot") -> dict:
+                """The get_snapshot payload (also attached to action results
+                when PAGE_AFTER_ACTION is on). Updates stall tracking."""
+                nonlocal stall_count, last_fingerprint, attempts_since_snapshot, relook_count
+                snap_stats = {}
+                elements = _snapshot_elements(page, stats=snap_stats)
+                fingerprint = _snapshot_fingerprint(page, elements)
+                if fingerprint == last_fingerprint:
+                    # A stall means an ACTION changed nothing. Looking at the
+                    # page again with no action since the last look is not a
+                    # stall - with PAGE_AFTER_ACTION the agent already has the
+                    # page, and an extra get_snapshot out of habit must not
+                    # earn a stall point (found in round 3: it doubled the
+                    # count and falsely BLOCKED a healthy run). Repeated
+                    # re-looks with nothing done still count, so a snapshot-
+                    # only loop is still stopped.
+                    if attempts_since_snapshot > 0 or relook_count >= 2:
+                        stall_count += 1
+                    else:
+                        relook_count += 1
+                else:
+                    stall_count = 0
+                    relook_count = 0
+                if attempts_since_snapshot > 0:
+                    relook_count = 0
+                attempts_since_snapshot = 0
+                last_fingerprint = fingerprint
+                # value_hash is internal-only bookkeeping for stall
+                # detection (see _ELEMENT_INFO_JS/_snapshot_fingerprint) -
+                # it must never be sent to the model: it's meaningless to
+                # the agent's reasoning, and since conversation history
+                # (unlike the system prompt/tools list) isn't under a
+                # prompt-cache breakpoint, leaving it in would silently
+                # inflate billed input tokens on every subsequent call
+                # for the rest of the test case, for every element, on
+                # every single snapshot. Strip it here, after it's
+                # already been used for the fingerprint above.
+                elements_for_model = _elements_for_model(elements)
+                snapshot_frames = None
+                if COMPACT_SNAPSHOT_ENCODING:
+                    elements_for_model, snapshot_frames = _compact_snapshot_elements(elements_for_model)
+                result_payload = {
+                    "url": page.url, "title": page.title(),
+                    "elements": elements_for_model,
+                    "steps_remaining": step_limit - step_num - 1,
+                }
+                if snapshot_frames:
+                    # frame index -> URL, listed once (COMPACT_SNAPSHOT_ENCODING)
+                    result_payload["frames"] = snapshot_frames
+                if snap_stats.get("omitted_keepable") or snap_stats.get("raw_capped_frames"):
+                    # Never truncate silently again: the agent must know
+                    # the page has more than it is being shown.
+                    result_payload["truncated"] = (
+                        "This page has more controls than could be listed "
+                        f"({snap_stats.get('omitted_keepable', 0)} usable ones omitted"
+                        + (", and part of at least one frame was too large to scan" if snap_stats.get("raw_capped_frames") else "")
+                        + "). If the "
+                        "field you need is missing, it exists but is not shown - say so "
+                        "in finish_test rather than guessing a ref."
+                    )
+                if stall_count > 0:
+                    # Told to the agent, not just logged - a stall it isn't
+                    # aware of just repeats; naming it here is what lets the
+                    # "look for a label instead" system-prompt rule actually
+                    # kick in before the hard STALL_LIMIT cutoff below.
+                    result_payload["warning"] = (
+                        "This looks identical to the page you just saw - your last action(s) "
+                        "didn't change anything. Try a different element (e.g. a label for the "
+                        "same control) rather than repeating the same action."
+                    )
+                step_log.append(f"Looked at the page ({page.url})" if source == "get_snapshot" else "Page read back after the action")
+                if rl is not None:
+                    # 2026-09-23: previously this event only recorded the
+                    # URL and stall_count - when 3 test cases later went
+                    # BLOCKED, the actual element list the agent was
+                    # working from at each step was gone, and the only way
+                    # to find out what was (or wasn't) clickable required a
+                    # brand-new live re-run against the real instance. That
+                    # is a bad position to be in for a customer-reported
+                    # BLOCKED result too - a customer shouldn't have to
+                    # reproduce a live run just so we can see what their
+                    # page looked like. Logging a compact per-element
+                    # summary (tag/role/label/frame, not the full snapshot
+                    # payload sent to the model) makes every future run
+                    # diagnosable from its own log alone.
+                    rl.event("step", {
+                        "step": step_num, "action": "get_snapshot", "source": source, "target": page.url,
+                        "result": "ok", "stall_count": stall_count,
+                        "element_count": len(elements_for_model),
+                        "omitted_keepable": snap_stats.get("omitted_keepable", 0),
+                        "raw_capped_frames": snap_stats.get("raw_capped_frames", 0),
+                        "elements_summary": [
+                            {
+                                "ref": e.get("ref"),
+                                "tag": e.get("tag"),
+                                "role": e.get("role"),
+                                "label": (e.get("label") or "")[:80],
+                                "frame_url": e.get("frame_url"),
+                            }
+                            for e in elements  # full list: the model's copy no longer carries frame_url
+                        ],
+                    })
+                return result_payload
+
             for step_num in range(MAX_AGENT_STEPS + PASS_REVIEW_EXTRA_STEPS):
                 if step_num >= step_limit:
                     break
@@ -1460,7 +1583,11 @@ def execute_test_case(
                     if paced and rl is not None:
                         rl.event("step", {"step": step_num, "action": "tpm_pacing", "waited_s": round(paced, 1),
                                           "est_tokens": est_tokens, "budget": TPM_BUDGET})
-                for attempt, backoff in enumerate([0] + RATE_LIMIT_BACKOFF_SECONDS):
+                # When the shared request gate is on, it already retries 429s
+                # (paced, with a shared cool-down); retrying again here would
+                # only multiply requests against the same per-minute quota.
+                engine_backoffs = [] if ai_client.pacing_enabled() else RATE_LIMIT_BACKOFF_SECONDS
+                for attempt, backoff in enumerate([0] + engine_backoffs):
                     if backoff:
                         time.sleep(backoff)
                     try:
@@ -1488,12 +1615,12 @@ def execute_test_case(
                         )
                         raise
                     except RateLimitError:
-                        if attempt == len(RATE_LIMIT_BACKOFF_SECONDS):
+                        if attempt == len(engine_backoffs):
                             raise
                         if rl is not None:
                             rl.event("warning", {
                                 "step": step_num, "message": "rate limited, retrying",
-                                "attempt": attempt + 1, "next_backoff_s": RATE_LIMIT_BACKOFF_SECONDS[attempt],
+                                "attempt": attempt + 1, "next_backoff_s": engine_backoffs[attempt],
                             })
                         continue
                 # Real token usage as reported by the provider - the measurement
@@ -1528,91 +1655,11 @@ def execute_test_case(
                 done = False
                 for tu in tool_uses:
                     name, inp = tu.name, tu.input
+                    if name in _PAGE_CHANGING_TOOLS or name in ("wait_for_text", "fill_login"):
+                        attempts_since_snapshot += 1
                     try:
                         if name == "get_snapshot":
-                            snap_stats = {}
-                            elements = _snapshot_elements(page, stats=snap_stats)
-                            fingerprint = _snapshot_fingerprint(page, elements)
-                            if fingerprint == last_fingerprint:
-                                stall_count += 1
-                            else:
-                                stall_count = 0
-                            last_fingerprint = fingerprint
-                            # value_hash is internal-only bookkeeping for stall
-                            # detection (see _ELEMENT_INFO_JS/_snapshot_fingerprint) -
-                            # it must never be sent to the model: it's meaningless to
-                            # the agent's reasoning, and since conversation history
-                            # (unlike the system prompt/tools list) isn't under a
-                            # prompt-cache breakpoint, leaving it in would silently
-                            # inflate billed input tokens on every subsequent call
-                            # for the rest of the test case, for every element, on
-                            # every single snapshot. Strip it here, after it's
-                            # already been used for the fingerprint above.
-                            elements_for_model = _elements_for_model(elements)
-                            snapshot_frames = None
-                            if COMPACT_SNAPSHOT_ENCODING:
-                                elements_for_model, snapshot_frames = _compact_snapshot_elements(elements_for_model)
-                            result_payload = {
-                                "url": page.url, "title": page.title(),
-                                "elements": elements_for_model,
-                                "steps_remaining": step_limit - step_num - 1,
-                            }
-                            if snapshot_frames:
-                                # frame index -> URL, listed once (COMPACT_SNAPSHOT_ENCODING)
-                                result_payload["frames"] = snapshot_frames
-                            if snap_stats.get("omitted_keepable") or snap_stats.get("raw_capped_frames"):
-                                # Never truncate silently again: the agent must know
-                                # the page has more than it is being shown.
-                                result_payload["truncated"] = (
-                                    "This page has more controls than could be listed "
-                                    f"({snap_stats.get('omitted_keepable', 0)} usable ones omitted"
-                                    + (", and part of at least one frame was too large to scan" if snap_stats.get("raw_capped_frames") else "")
-                                    + "). If the "
-                                    "field you need is missing, it exists but is not shown - say so "
-                                    "in finish_test rather than guessing a ref."
-                                )
-                            if stall_count > 0:
-                                # Told to the agent, not just logged - a stall it isn't
-                                # aware of just repeats; naming it here is what lets the
-                                # "look for a label instead" system-prompt rule actually
-                                # kick in before the hard STALL_LIMIT cutoff below.
-                                result_payload["warning"] = (
-                                    "This looks identical to the page you just saw - your last action(s) "
-                                    "didn't change anything. Try a different element (e.g. a label for the "
-                                    "same control) rather than repeating the same action."
-                                )
-                            step_log.append(f"Looked at the page ({page.url})")
-                            if rl is not None:
-                                # 2026-09-23: previously this event only recorded the
-                                # URL and stall_count - when 3 test cases later went
-                                # BLOCKED, the actual element list the agent was
-                                # working from at each step was gone, and the only way
-                                # to find out what was (or wasn't) clickable required a
-                                # brand-new live re-run against the real instance. That
-                                # is a bad position to be in for a customer-reported
-                                # BLOCKED result too - a customer shouldn't have to
-                                # reproduce a live run just so we can see what their
-                                # page looked like. Logging a compact per-element
-                                # summary (tag/role/label/frame, not the full snapshot
-                                # payload sent to the model) makes every future run
-                                # diagnosable from its own log alone.
-                                rl.event("step", {
-                                    "step": step_num, "action": "get_snapshot", "target": page.url,
-                                    "result": "ok", "stall_count": stall_count,
-                                    "element_count": len(elements_for_model),
-                                    "omitted_keepable": snap_stats.get("omitted_keepable", 0),
-                                    "raw_capped_frames": snap_stats.get("raw_capped_frames", 0),
-                                    "elements_summary": [
-                                        {
-                                            "ref": e.get("ref"),
-                                            "tag": e.get("tag"),
-                                            "role": e.get("role"),
-                                            "label": (e.get("label") or "")[:80],
-                                            "frame_url": e.get("frame_url"),
-                                        }
-                                        for e in elements  # full list: the model's copy no longer carries frame_url
-                                    ],
-                                })
+                            result_payload = take_snapshot("get_snapshot")
                         elif name == "fill_login":
                             loc_u = _element_locator(page, inp["username_ref"])
                             loc_p = _element_locator(page, inp["password_ref"])
@@ -1907,6 +1954,25 @@ def execute_test_case(
                         "content": json.dumps(result_payload),
                     })
 
+                if PAGE_AFTER_ACTION and not done and tool_results:
+                    # Attach the fresh page to the LAST page-changing action of
+                    # this turn (once per turn, not per action), unless the
+                    # agent already asked for a snapshot after it.
+                    names = [tu.name for tu in tool_uses]
+                    last_change = max((i for i, n in enumerate(names) if n in _PAGE_CHANGING_TOOLS), default=-1)
+                    later_snapshot = any(n == "get_snapshot" for n in names[last_change + 1:])
+                    if last_change >= 0 and not later_snapshot:
+                        try:
+                            if PAGE_AFTER_ACTION_SETTLE_MS > 0:
+                                page.wait_for_timeout(PAGE_AFTER_ACTION_SETTLE_MS)
+                            page_now = take_snapshot("after_action")
+                            action_payload = json.loads(tool_results[last_change]["content"])
+                            action_payload.update(page_now)
+                            tool_results[last_change]["content"] = json.dumps(action_payload)
+                        except Exception:
+                            # Never fail an action because the read-back failed;
+                            # the agent can still call get_snapshot itself.
+                            pass
                 messages.append({"role": "user", "content": tool_results})
 
                 if on_step is not None:

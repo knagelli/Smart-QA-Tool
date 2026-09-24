@@ -26,8 +26,143 @@ provider choice at import time, specifically so a live env var change takes
 effect without a restart-dependent code path.
 """
 import os
+import threading
+import time
 
-from anthropic import Anthropic, AnthropicBedrock
+from anthropic import Anthropic, AnthropicBedrock, RateLimitError
+
+# ---------------------------------------------------------------------------
+# REQUEST-RATE PACING (2026-09-24). The Bedrock quota that actually binds is
+# requests per minute (account applied value: 10 for Claude Sonnet 4.6
+# cross-region, vs AWS default 10,000; tokens/minute is 6,000,000 and is not
+# the constraint). It is ONE limit for the whole AWS account, shared by every
+# client, every test execution and every test generation. Before this gate,
+# each caller fired requests independently and the SDK silently retried each
+# 429 twice more, so throttling fed itself and whole batches ended BLOCKED.
+#
+# Every client returned by get_client() now shares one process-wide gate:
+#   - at most REQ2QA_RPM_LIMIT requests per minute, evenly spaced (no bursts);
+#   - requests wait in first-come-first-served order, so concurrent runs from
+#     different clients share capacity fairly;
+#   - priority "interactive" (test generation - a person is waiting on the
+#     screen) goes ahead of "background" (test execution), but background is
+#     guaranteed a turn after every INTERACTIVE_STREAK_MAX interactive grants;
+#   - the SDK's hidden retries are disabled (max_retries=0) and 429s are
+#     retried here instead, through the same gate, with a shared cool-down so
+#     every waiting request backs off together instead of piling on.
+# The gate is per PROCESS. req2qa runs as a single uvicorn process today; if
+# it is ever run with N worker processes, set REQ2QA_RPM_LIMIT to the per-
+# worker share (total / N) or the workers together will exceed the quota.
+# REQ2QA_RPM_LIMIT=0 turns all of this off (original behaviour, SDK retries
+# back on). Set it to ~80-90% of the applied quota; raise it when AWS does.
+# ---------------------------------------------------------------------------
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, "").strip() or default)
+    except ValueError:
+        return default
+
+
+INTERACTIVE_STREAK_MAX = 3
+
+
+def rpm_limit() -> int:
+    return _env_int("REQ2QA_RPM_LIMIT", 8)
+
+
+def pacing_enabled() -> bool:
+    return rpm_limit() > 0
+
+
+class _RequestGate:
+    def __init__(self):
+        self._cv = threading.Condition()
+        self._queues = {"interactive": [], "background": []}
+        self._next_ticket = 0
+        self._next_slot = 0.0          # earliest time the next grant may happen
+        self._interactive_streak = 0
+        self.stats = {"grants": 0, "throttled": 0, "waited_s": 0.0}
+
+    def _head_is(self, ticket, priority) -> bool:
+        inter, back = self._queues["interactive"], self._queues["background"]
+        if inter and back and self._interactive_streak >= INTERACTIVE_STREAK_MAX:
+            return priority == "background" and back[0] == ticket
+        if inter:
+            return priority == "interactive" and inter[0] == ticket
+        return priority == "background" and bool(back) and back[0] == ticket
+
+    def acquire(self, priority: str = "background", clock=time) -> float:
+        """Blocks until this request may be sent. Returns seconds waited."""
+        limit = rpm_limit()
+        if limit <= 0:
+            return 0.0
+        priority = priority if priority in self._queues else "background"
+        start = clock.time()
+        with self._cv:
+            ticket = self._next_ticket; self._next_ticket += 1
+            self._queues[priority].append(ticket)
+            try:
+                while True:
+                    now = clock.time()
+                    if self._head_is(ticket, priority) and now >= self._next_slot:
+                        self._queues[priority].pop(0)
+                        self._next_slot = max(now, self._next_slot) + 60.0 / limit
+                        if priority == "interactive":
+                            self._interactive_streak += 1
+                        else:
+                            self._interactive_streak = 0
+                        self.stats["grants"] += 1
+                        waited = now - start
+                        self.stats["waited_s"] += waited
+                        self._cv.notify_all()
+                        return waited
+                    timeout = max(0.05, self._next_slot - now) if self._head_is(ticket, priority) else 1.0
+                    self._cv.wait(timeout=timeout)
+            except BaseException:
+                if ticket in self._queues[priority]:
+                    self._queues[priority].remove(ticket)
+                self._cv.notify_all()
+                raise
+
+    def throttled(self, cooldown_s: float, clock=time):
+        """A 429 came back: push the next grant back for everyone."""
+        with self._cv:
+            self.stats["throttled"] += 1
+            self._next_slot = max(self._next_slot, clock.time() + cooldown_s)
+            self._cv.notify_all()
+
+
+_GATE = _RequestGate()
+RATE_RETRY_ATTEMPTS = 6               # sends per logical request, incl. the first
+RATE_RETRY_COOLDOWNS = [8, 15, 30, 45, 60]   # seconds, applied to the whole gate
+
+
+class _PacedMessages:
+    def __init__(self, inner, priority):
+        self._inner, self._priority = inner, priority
+
+    def create(self, **kwargs):
+        last_exc = None
+        for attempt in range(RATE_RETRY_ATTEMPTS):
+            _GATE.acquire(self._priority)
+            try:
+                return self._inner.create(**kwargs)
+            except RateLimitError as e:
+                last_exc = e
+                if attempt < len(RATE_RETRY_COOLDOWNS):
+                    _GATE.throttled(RATE_RETRY_COOLDOWNS[attempt])
+        raise last_exc
+
+
+class _PacedClient:
+    """Wraps an Anthropic/AnthropicBedrock client; only messages.create is
+    gated, everything else passes through untouched."""
+    def __init__(self, inner, priority):
+        self._inner = inner
+        self.messages = _PacedMessages(inner.messages, priority)
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
 
 # The exact, verified Bedrock inference profile ID for Claude Sonnet 4.6,
 # restricted to Australia (routes only to ap-southeast-2 Sydney and
@@ -40,7 +175,7 @@ BEDROCK_MODEL_ID = "au.anthropic.claude-sonnet-4-6"
 BEDROCK_REGION = os.environ.get("AWS_REGION", "ap-southeast-2")
 
 
-def get_client(api_key: str | None = None):
+def get_client(api_key: str | None = None, priority: str = "interactive"):
     """
     Returns an Anthropic-API-compatible client. `api_key` is accepted for
     backward compatibility with existing call sites (which currently read
@@ -80,8 +215,12 @@ def get_client(api_key: str | None = None):
                 "Anthropic for a request that expected AU-only Bedrock "
                 "routing."
             )
+        if pacing_enabled():
+            return _PacedClient(AnthropicBedrock(aws_region=BEDROCK_REGION, max_retries=0), priority)
         return AnthropicBedrock(aws_region=BEDROCK_REGION)
 
+    if pacing_enabled():
+        return _PacedClient(Anthropic(api_key=api_key, max_retries=0), priority)
     return Anthropic(api_key=api_key)
 
 
