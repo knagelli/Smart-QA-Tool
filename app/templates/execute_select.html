@@ -57,12 +57,6 @@
 
     <label style="margin-bottom:8px">Select test case(s) to run (up to {{ max_selectable }} per run)</label>
     {% if test_cases %}
-    <div class="tc-toolbar" id="tc-bulk" data-max="{{ max_selectable }}" style="display:none">
-      <button type="button" id="tc-select-all">Select All</button>
-      <button type="button" id="tc-deselect-all">Deselect All</button>
-      <span class="hint" id="tc-bulk-count"></span>
-    </div>
-    <p class="hint" id="tc-bulk-note" style="display:none;margin:0 0 10px"></p>
     {% for tc in test_cases %}
     <label class="inline-check js-tc-check" style="margin-bottom:10px">
       <input type="checkbox" name="select_{{ tc.tc_id }}" class="js-select-tc">
@@ -93,12 +87,11 @@
 
     <button type="submit" style="margin-top:8px">Run Selected Test Cases Live</button>
   </form>
-  <p class="footnote">Test cases run one at a time, each in its own isolated browser session (about 1&ndash;2 minutes each). You'll be taken to a live progress page right away and can leave it open, or close the tab and come back to the same link later &mdash; the run keeps going either way.</p>
+  <p class="footnote">Test cases run one at a time, each in its own isolated browser session (about 3&ndash;5 minutes each). You'll be taken to a live progress page right away and can leave it open, or close the tab and come back to the same link later &mdash; the run keeps going either way.</p>
   {% include "_client_hub_footnote.html" %}
   <p class="footnote"><a href="/start">&larr; Back to Req2QA</a></p>
 </div>
 {% include "_footer.html" %}
 <script src="/static/execute_select_estimate.js" defer></script>
-<script src="/static/execute_select_bulk.js" defer></script>
 </body>
 </html>
