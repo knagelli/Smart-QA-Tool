@@ -295,6 +295,68 @@ def find_screenshot_hash_matches(log_id: str, uploaded_sha256: str) -> list[dict
     return matches
 
 
+# ---------------------------------------------------------------------------
+# Bulk export (2026-09-25). The admin logs page could previously only be
+# read one run at a time - fine for chasing a single client-reported issue,
+# tedious for anything that needs to look across many runs at once (e.g.
+# working out where AI spend actually went). These give the whole matching
+# set in one file instead of one click per row.
+# ---------------------------------------------------------------------------
+
+# Claude Sonnet 4.5/4.6 list pricing, USD per token (Anthropic direct and
+# Bedrock use the same rates for this model as of 2026-09). Cache writes
+# here are billed as the 5-minute ephemeral tier, which is the only tier
+# this app's cache_control blocks use (see execute_engine.py) - if that
+# ever changes to the 1-hour tier, update CACHE_WRITE_PER_TOKEN to $6/MTok.
+INPUT_PER_TOKEN = 3.00 / 1_000_000
+OUTPUT_PER_TOKEN = 15.00 / 1_000_000
+CACHE_WRITE_PER_TOKEN = 3.75 / 1_000_000
+CACHE_READ_PER_TOKEN = 0.30 / 1_000_000
+
+
+def usage_and_cost(log_id: str) -> dict:
+    """Reads one log's finish-event usage (if present) and returns the raw
+    token counts plus an estimated USD cost at Sonnet 4.5/4.6 list pricing.
+    Returns all zeros (not None) if the log has no usage recorded (e.g. a
+    run that never reached client.messages.create, or an older log from
+    before usage logging existed) - callers can sum this safely either way.
+    """
+    usage = {}
+    for rec in read_log(log_id) or []:
+        if rec.get("kind") == "finish":
+            usage = (rec.get("summary") or {}).get("usage") or {}
+    inp = int(usage.get("input") or 0)
+    out = int(usage.get("output") or 0)
+    cw = int(usage.get("cache_write") or 0)
+    cr = int(usage.get("cache_read") or 0)
+    cost = (
+        inp * INPUT_PER_TOKEN
+        + out * OUTPUT_PER_TOKEN
+        + cw * CACHE_WRITE_PER_TOKEN
+        + cr * CACHE_READ_PER_TOKEN
+    )
+    return {
+        "input_tokens": inp,
+        "output_tokens": out,
+        "cache_write_tokens": cw,
+        "cache_read_tokens": cr,
+        "estimated_cost_usd": round(cost, 4),
+    }
+
+
+def export_csv_rows(query: Optional[str] = None, run_type: Optional[str] = None,
+                     status: Optional[str] = None) -> list[dict]:
+    """One row per matching log: its search-page summary plus usage/cost.
+    Same filters as search_logs, no `limit` - an export should return
+    everything that matches, not just the first page."""
+    rows = []
+    for summary in search_logs(query=query, run_type=run_type, status=status, limit=10_000):
+        row = dict(summary)
+        row.update(usage_and_cost(summary["log_id"]))
+        rows.append(row)
+    return rows
+
+
 def cleanup_old_logs(retention_days: int = RETENTION_DAYS) -> int:
     """Delete logs older than retention_days. Returns count deleted.
     Call this from the same sweep job that already handles run/report

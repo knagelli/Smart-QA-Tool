@@ -16,12 +16,15 @@
 # access code does not grant entry - the only way in is the one password
 # on the login page below.
 
+import csv
+import io
 import os
 import secrets
+import zipfile
 from pathlib import Path
 
 from fastapi import APIRouter, Request, Form, UploadFile, File
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 from . import run_logger
@@ -79,6 +82,61 @@ async def logs_search(
         request,
         "admin_logs_list.html",
         {"results": results, "q": q, "run_type": run_type, "status": status},
+    )
+
+
+# These two must stay registered BEFORE /admin/logs/{log_id} below - FastAPI
+# matches routes in registration order, and "/admin/logs/export.csv" has the
+# same path shape as "/admin/logs/{log_id}" (log_id would just become the
+# literal string "export.csv"), so the export routes would never be reached
+# if they came after the catch-all one.
+@router.get("/admin/logs/export.csv")
+async def logs_export_csv(request: Request, q: str = "", run_type: str = "", status: str = ""):
+    """One row per matching run: its search-page summary plus token usage
+    and an estimated USD cost. Built so a cost or troubleshooting sweep
+    across many runs doesn't mean opening each one by hand - the same
+    q/run_type/status filters as the search box narrow this export too."""
+    if not _is_authed(request):
+        return RedirectResponse(url="/admin/login", status_code=303)
+    rows = run_logger.export_csv_rows(query=q or None, run_type=run_type or None, status=status or None)
+    buf = io.StringIO()
+    fieldnames = [
+        "log_id", "run_type", "run_id", "correlation_ref", "status", "started",
+        "input_tokens", "output_tokens", "cache_write_tokens", "cache_read_tokens",
+        "estimated_cost_usd",
+    ]
+    writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(row)
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=req2qa_logs_export.csv"},
+    )
+
+
+@router.get("/admin/logs/export.zip")
+async def logs_export_zip(request: Request, q: str = "", run_type: str = "", status: str = ""):
+    """The raw .jsonl for every matching run, zipped, for a deeper dive than
+    the CSV summary supports (e.g. reading full step-by-step events across
+    several runs at once instead of clicking into each one)."""
+    if not _is_authed(request):
+        return RedirectResponse(url="/admin/login", status_code=303)
+    summaries = run_logger.search_logs(query=q or None, run_type=run_type or None, status=status or None, limit=10_000)
+    mem = io.BytesIO()
+    with zipfile.ZipFile(mem, "w", zipfile.ZIP_DEFLATED) as zf:
+        for s in summaries:
+            log_id = s["log_id"]
+            path = run_logger.LOG_ROOT / f"{log_id}.jsonl"
+            if path.exists():
+                zf.write(path, arcname=f"{log_id}.jsonl")
+    mem.seek(0)
+    return StreamingResponse(
+        mem,
+        media_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=req2qa_logs_export.zip"},
     )
 
 
