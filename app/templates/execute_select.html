@@ -57,6 +57,12 @@
 
     <label style="margin-bottom:8px">Select test case(s) to run (up to {{ max_selectable }} per run)</label>
     {% if test_cases %}
+    <div class="tc-toolbar" id="tc-bulk" data-max="{{ max_selectable }}" style="display:none">
+      <button type="button" id="tc-select-all">Select All</button>
+      <button type="button" id="tc-deselect-all">Deselect All</button>
+      <span class="hint" id="tc-bulk-count"></span>
+    </div>
+    <p class="hint" id="tc-bulk-note" style="display:none;margin:0 0 10px"></p>
     {% for tc in test_cases %}
     <label class="inline-check js-tc-check" style="margin-bottom:10px">
       <input type="checkbox" name="select_{{ tc.tc_id }}" class="js-select-tc">
@@ -93,5 +99,6 @@
 </div>
 {% include "_footer.html" %}
 <script src="/static/execute_select_estimate.js" defer></script>
+<script src="/static/execute_select_bulk.js" defer></script>
 </body>
 </html>
