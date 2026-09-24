@@ -95,6 +95,14 @@ def _evidence_html(ev) -> str:
         f'<td class="{"ev-empty" if f.get("value") == "(empty)" else ""}">{esc(f.get("value",""))}</td></tr>'
         for f in fields
     ) or '<tr><td colspan="2" class="empty">No form fields visible at the end of the run.</td></tr>'
+    ce = ev.get("clause_evidence") or []
+    ce_html = ""
+    if ce:
+        ce_rows = "".join(
+            f'<tr><td>{esc(str(c.get("clause","")))}</td><td>{esc(str(c.get("observed","")))}</td></tr>'
+            for c in ce if isinstance(c, dict)
+        )
+        ce_html = f'<h4>Expected result, clause by clause (what was observed)</h4><table class="ev-table"><tr><th>Clause</th><th>Observed</th></tr>{ce_rows}</table>'
     reviewed = ('<p class="ev-note">The agent was made to re-check its PASS against these steps and the live form before it was accepted.</p>'
                 if ev.get("pass_reviewed") else "")
     return f"""<details class="evidence">
@@ -103,7 +111,7 @@ def _evidence_html(ev) -> str:
     <div class="ev-grid">
       <div><h4>Test steps</h4><pre class="ev-steps">{esc(ev.get("steps",""))}</pre>
       <h4>Expected result</h4><pre class="ev-steps">{esc(ev.get("expected_result",""))}</pre></div>
-      <div><h4>Form fields at end of run</h4><table class="ev-table"><tr><th>Field</th><th>Value</th></tr>{rows}</table></div>
+      <div>{ce_html}<h4>Form fields at end of run</h4><table class="ev-table"><tr><th>Field</th><th>Value</th></tr>{rows}</table></div>
     </div>
   </details>"""
 

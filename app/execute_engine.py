@@ -92,6 +92,28 @@ PASS_REVIEW_EXTRA_STEPS = 8
 # One-time extra budget when a final PASS is re-checked because the form
 # changed after the review (see Fix 3 in execute_test_case).
 PASS_RECHECK_EXTRA_STEPS = 4
+
+# Clause-evidence gate (2026-09-24, from the 11-case ServiceNow batch: TC-002
+# PASSed by reasoning about how a different role "would" behave, TC-015 and
+# TC-004 PASSed clauses that were never observed). A PASS must carry
+# clause_evidence with every clause 'met' and a concrete observation. The
+# harness rejects it otherwise; after CLAUSE_EVIDENCE_MAX_REJECTIONS the
+# verdict becomes BLOCKED ("PASS could not be substantiated") rather than an
+# unsupported PASS. Flip ENABLE_CLAUSE_EVIDENCE_GATE to False to revert.
+ENABLE_CLAUSE_EVIDENCE_GATE = True
+CLAUSE_EVIDENCE_MAX_REJECTIONS = 2
+CLAUSE_EVIDENCE_EXTRA_STEPS = 3
+# Wording that signals an assumption rather than an observation. Heuristic
+# on purpose: a false hit only costs the agent one rewrite of the evidence.
+_ASSUMPTION_MARKERS = ("would ", "assume", "presumably", "typically", "standard behavior",
+                       "standard behaviour", "should be", "likely", "probably")
+# Wording in an observation that says the clause was NOT seen to hold, while
+# the agent marks it 'met' (e.g. TC-002: "readonly false" for a read-only
+# clause). Word-boundary matched. Also heuristic: the agent is told exactly
+# which words tripped it, so a genuine observation just gets reworded.
+_CONTRADICTION_PATTERNS = (r"\bfalse\b", r"\bdid not\b", r"\bdidn't\b", r"\bnot verified\b",
+                           r"\bunverified\b", r"\bunable to\b", r"\bcould not\b", r"\bcouldn't\b",
+                           r"\bnot observed\b", r"\bnot confirmed\b")
 # Evidence table limits: never capture more than this many fields, or more
 # than this many characters of any one value.
 EVIDENCE_MAX_FIELDS = 60
@@ -250,8 +272,14 @@ _ELEMENT_INFO_JS = """
     // and file inputs are never read. Python masks sensitive labels before
     // the model sees it, and the run log never carries it.
     let value = null;
+    let options = null;
     if (tag === 'select') {
         const o = el.options[el.selectedIndex]; value = o ? o.text : '';
+        // 2026-09-24 (TC-008/TC-011): the agent could only see the selected
+        // option, so "verify the dropdown contains X" was checked by trial
+        // and error. Capped; masked in Python for sensitive fields.
+        options = Array.from(el.options).slice(0, 40).map(op => (op.text || '').trim().slice(0, 60));
+        if (el.options.length > 40) options.push('(+' + (el.options.length - 40) + ' more)');
     } else if (itype === 'checkbox' || itype === 'radio') {
         value = el.checked ? 'checked' : 'unchecked';
     } else if ((tag === 'input' && !['password', 'hidden', 'file', 'submit', 'button', 'reset', 'image'].includes(itype)) || tag === 'textarea') {
@@ -282,6 +310,8 @@ _ELEMENT_INFO_JS = """
         field_label: field_label,
         pointer_locked: pointer_locked,
         text_entry: !!editable_kind,
+        options: options,
+        multiple: !!el.multiple,
     };
 }
 """
@@ -674,7 +704,7 @@ def _elements_for_model(elements: list) -> list:
     per-step token cost down (most elements are buttons/links with neither)."""
     out = []
     for e in elements:
-        m = {k: v for k, v in e.items() if k not in ("value_hash", "value", "readonly", "field_label", "pointer_locked", "text_entry")}
+        m = {k: v for k, v in e.items() if k not in ("value_hash", "value", "readonly", "field_label", "pointer_locked", "text_entry", "options", "multiple")}
         fl = e.get("field_label") or ""
         if fl and fl != e.get("label"):
             # e.g. label "incident.number" (from name=) -> field_label "Number"
@@ -684,6 +714,11 @@ def _elements_for_model(elements: list) -> list:
             m["value"] = v if v != "" else "(empty)"
         if e.get("readonly"):
             m["readonly"] = True
+        if e.get("options") is not None:
+            masked = _safe_value_for_model((e.get("label", "") + " " + fl).strip(), "x") != "x"
+            m["options"] = ["[hidden - sensitive field]"] if masked else e["options"]
+        if e.get("multiple"):
+            m["multiple"] = True
         out.append(m)
     return out
 
@@ -716,6 +751,37 @@ def _form_diff(before: list, after: list) -> list:
     return changes
 
 
+def _clause_evidence_problems(ce) -> list:
+    """Problems that stop a PASS being accepted, as plain sentences for the
+    agent. Empty list = acceptable. Checks structure and wording only; it
+    cannot prove an observation is true (that is what the evidence table
+    and screenshots in the report are for)."""
+    if not isinstance(ce, list) or not ce:
+        return ["clause_evidence is missing: list each clause of the expected result with what you observed."]
+    problems = []
+    for i, item in enumerate(ce, 1):
+        if not isinstance(item, dict):
+            problems.append(f"entry {i} is not a clause/observed/status object")
+            continue
+        clause = str(item.get("clause", "")).strip() or f"entry {i}"
+        observed = str(item.get("observed", "")).strip()
+        status = item.get("status")
+        if status != "met":
+            problems.append(f"'{clause[:80]}' is {status or 'missing a status'} - a PASS needs every clause met")
+        if len(observed) < 4:
+            problems.append(f"'{clause[:80]}' has no concrete observation")
+        else:
+            low = observed.lower()
+            hits = [m.strip() for m in _ASSUMPTION_MARKERS if m in low]
+            if hits:
+                problems.append(f"'{clause[:80]}' evidence reads as an assumption ({', '.join(hits)}) - state what you actually saw")
+            contra = [pat.replace("\\b", "") for pat in _CONTRADICTION_PATTERNS if re.search(pat, low)]
+            if status == "met" and contra:
+                problems.append(f"'{clause[:80]}' is marked met but the observation says otherwise ({', '.join(contra)}) - "
+                                "if the clause did not hold, the verdict is FAIL; if it did, describe what you saw that shows it")
+    return problems
+
+
 def _pass_review_message(test_case: dict, form_fields: list) -> dict:
     return {
         "ok": False,
@@ -727,8 +793,9 @@ def _pass_review_message(test_case: dict, form_fields: list) -> dict:
             "was read directly from the page just now. If any step was skipped, any value is wrong, or "
             "a required field is '(empty)', go back and complete it with the normal tools now - you have "
             "a few extra actions reserved for this. Then call finish_test again. Only call PASS if every "
-            "step and the expected result are genuinely satisfied; otherwise call FAIL or BLOCKED and "
-            "name the specific step. This check happens once; your next finish_test is final."
+            "step and the expected result are genuinely satisfied, with clause_evidence giving what you "
+            "observed for each clause; otherwise call FAIL or BLOCKED and name the specific step or unmet "
+            "precondition. This check happens once; your next finish_test is final."
         ),
         "original_precondition": test_case.get("precondition", ""),
         "original_steps": test_case.get("steps", ""),
@@ -961,6 +1028,24 @@ TOOLS = [
             "properties": {
                 "verdict": {"type": "string", "enum": ["PASS", "FAIL", "BLOCKED"]},
                 "notes": {"type": "string", "description": "Plain-language explanation of the outcome, for a non-technical reviewer."},
+                "clause_evidence": {
+                    "type": "array",
+                    "description": (
+                        "REQUIRED for PASS. Split the expected result into its individual checkable clauses and give one "
+                        "entry per clause: the clause, what you actually OBSERVED on the page (a value, message, option "
+                        "list or screen state you saw - not an assumption or how the system 'would' behave), and status. "
+                        "PASS is only accepted when every clause is 'met' with observed evidence."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "clause": {"type": "string"},
+                            "observed": {"type": "string"},
+                            "status": {"type": "string", "enum": ["met", "not_met", "not_checked"]},
+                        },
+                        "required": ["clause", "observed", "status"],
+                    },
+                },
                 "created_entity": {
                     "type": "object",
                     "description": "Only when this test case's job was to create a new reusable record (e.g. a new employee): the key identifying field values you actually entered/saved (e.g. first_name, last_name, employee_id), so a later test case can reuse this exact record. Omit entirely if this test case did not create a new reusable record.",
@@ -1045,6 +1130,9 @@ Rules:
 - If you land on a screen that looks like a single sign-on redirect, an MFA/one-time-code prompt, or anything else you cannot complete with the tools available, call finish_test with verdict BLOCKED and explain what you saw - do not guess or force through it.
 - Carry out the test steps exactly as written against the real UI. If the UI doesn't match what the steps describe, use your judgement to find the equivalent control, but call finish_test with FAIL (not BLOCKED) if the expected result genuinely does not occur.
 - Call finish_test as soon as you have a clear verdict. Do not keep exploring after that.
+- Verdicts must rest on what you OBSERVED, never on assumptions. If the test's precondition cannot be met in this environment (e.g. it requires a different user role than the one you are logged in as, or data that does not exist), call finish_test with BLOCKED and name the unmet precondition - never PASS by reasoning about how the system "would" behave for a different role or setup.
+- If you use a different control or method than the steps specify (e.g. type-ahead instead of a lookup popup), say so in your notes. That step only counts as met if your substitute exercises the same behavior the step is testing; otherwise the verdict cannot be PASS.
+- For PASS, fill clause_evidence: one entry per clause of the expected result, each with what you actually observed. A clause you did not directly observe is 'not_checked', and then the verdict is not PASS. Dropdowns in the snapshot list their options - use those to verify option lists rather than trial-and-error selection.
 - You have a limited number of actions for this run - be efficient, don't repeat get_snapshot without having taken an action in between unless the page just changed.
 - After submitting a form, always take a fresh snapshot and check for an inline validation message (e.g. "should not exceed N characters", "already exists", "required") before deciding what to do next. If you see one, adapt the value you enter to satisfy it (e.g. shorten it, change it) - do not resubmit the exact same value again. If the same action fails validation twice in a row even after you've adapted the value, stop retrying it - call finish_test with FAIL or BLOCKED and quote the validation message in your notes, rather than repeating it for the rest of your available actions.
 - A toggle/switch control (e.g. "Create Login Details?", "Enabled") is often a checkbox styled to look like a switch. If you don't see an element that looks directly clickable for it, look for a label with that same wording in the snapshot and click that instead - clicking a field's label toggles it exactly like clicking the control itself. If you still can't find any way to change it after one such attempt, don't keep retrying the same snapshot - call finish_test with BLOCKED and say which control you couldn't operate.
@@ -1138,6 +1226,8 @@ def execute_test_case(
             last_shown_fields = None
             pass_recheck_done = False
             recheck_changes = []
+            clause_rejections = 0
+            accepted_clause_evidence = None
 
             for step_num in range(MAX_AGENT_STEPS + PASS_REVIEW_EXTRA_STEPS):
                 if step_num >= step_limit:
@@ -1501,9 +1591,41 @@ def execute_test_case(
                                 # Field names only - values never go to the run log.
                                 rl.event("step", {"step": step_num, "action": "pass_recheck",
                                                   "changed_fields": [c["field"] for c in recheck_changes]})
+                        elif (name == "finish_test" and ENABLE_CLAUSE_EVIDENCE_GATE and inp.get("verdict") == "PASS"
+                              and clause_rejections < CLAUSE_EVIDENCE_MAX_REJECTIONS
+                              and _clause_evidence_problems(inp.get("clause_evidence"))):
+                            problems = _clause_evidence_problems(inp.get("clause_evidence"))
+                            clause_rejections += 1
+                            step_limit = max(step_limit, step_num + 1 + CLAUSE_EVIDENCE_EXTRA_STEPS)
+                            result_payload = {
+                                "ok": False, "evidence_required": True,
+                                "problems": problems,
+                                "message": (
+                                    "PASS not accepted: it is not backed clause by clause by what you observed. Fix "
+                                    "the problems listed (check anything you have not actually seen, using the tools), "
+                                    "or call finish_test with FAIL or BLOCKED if a clause is not met or cannot be "
+                                    f"verified. Attempts left before this becomes BLOCKED: {CLAUSE_EVIDENCE_MAX_REJECTIONS - clause_rejections}."
+                                ),
+                                "original_expected_result": test_case.get("expected_result", ""),
+                            }
+                            step_log.append("PASS rejected: expected result not backed clause by clause")
+                            if rl is not None:
+                                rl.event("step", {"step": step_num, "action": "clause_evidence_rejected",
+                                                  "attempt": clause_rejections, "problem_count": len(problems)})
                         elif name == "finish_test":
                             verdict = inp["verdict"]
                             notes = inp["notes"]
+                            if (verdict == "PASS" and ENABLE_CLAUSE_EVIDENCE_GATE
+                                    and _clause_evidence_problems(inp.get("clause_evidence"))):
+                                # Out of rejections and still unsupported: an honest
+                                # BLOCKED beats an unsupported PASS.
+                                verdict = "BLOCKED"
+                                notes = ("req2qa could not accept this PASS: after repeated requests the agent did not "
+                                         "back every clause of the expected result with an observation. Remaining issues: "
+                                         + "; ".join(_clause_evidence_problems(inp.get("clause_evidence"))[:5])
+                                         + ". Agent's notes: " + notes)
+                            if verdict == "PASS":
+                                accepted_clause_evidence = inp.get("clause_evidence")
                             notes_for_log = notes
                             if verdict == "PASS" and pass_review_done and last_shown_fields is not None:
                                 # Anything that changed and was PASSed over - including
@@ -1607,5 +1729,6 @@ def execute_test_case(
             "expected_result": test_case.get("expected_result", ""),
             "form_fields": evidence_fields,
             "pass_reviewed": pass_review_done,
+            "clause_evidence": accepted_clause_evidence,
         },
     }
