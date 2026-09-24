@@ -9,7 +9,7 @@
       line.textContent = "Select test cases above to see an estimated run time.";
       return;
     }
-    var lowMin = n * 1, highMin = n * 2;
+    var lowMin = n * 3, highMin = n * 5;
     line.textContent = n + " test case" + (n === 1 ? "" : "s") + " selected — roughly " + lowMin + "-" + highMin + " minutes total, run one after another.";
   }
   boxes.forEach(function(b){ b.addEventListener("change", update); });
