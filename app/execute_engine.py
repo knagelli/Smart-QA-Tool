@@ -267,6 +267,9 @@ _ELEMENT_INFO_JS = """
     } catch (e) {}
     field_label = (field_label || '').replace(/\s+/g, ' ').replace(/^[*\s]+/, '').trim().slice(0, 80);
     const readonly = !!(el.readOnly || el.disabled || el.getAttribute('aria-readonly') === 'true' || el.getAttribute('aria-disabled') === 'true');
+    let pointer_locked = false;
+    try { pointer_locked = getComputedStyle(el).pointerEvents === 'none'; } catch (e) {}
+    const editable_kind = (value !== null && !['checkbox', 'radio'].includes(itype) && tag !== 'select') || el.isContentEditable;
     return {
         tag: tag,
         type: itype,
@@ -277,6 +280,8 @@ _ELEMENT_INFO_JS = """
         value: value,
         readonly: readonly,
         field_label: field_label,
+        pointer_locked: pointer_locked,
+        text_entry: !!editable_kind,
     };
 }
 """
@@ -669,7 +674,7 @@ def _elements_for_model(elements: list) -> list:
     per-step token cost down (most elements are buttons/links with neither)."""
     out = []
     for e in elements:
-        m = {k: v for k, v in e.items() if k not in ("value_hash", "value", "readonly", "field_label")}
+        m = {k: v for k, v in e.items() if k not in ("value_hash", "value", "readonly", "field_label", "pointer_locked", "text_entry")}
         fl = e.get("field_label") or ""
         if fl and fl != e.get("label"):
             # e.g. label "incident.number" (from name=) -> field_label "Number"
@@ -1344,7 +1349,15 @@ def execute_test_case(
                                 pre = loc.evaluate(_CONTROL_INFO_JS)
                             except Exception:
                                 pre = {}
-                            if pre.get("readonly"):
+                            if pre and not pre.get("text_entry") and not pre.get("readonly"):
+                                # e.g. a read-only value rendered as plain text (common on
+                                # ServiceNow for users without write access) - previously a
+                                # vague "Action failed: Error".
+                                result_payload = {
+                                    "ok": False, "not_editable": True,
+                                    "note": "This element is not a text field (it may be a read-only value shown as plain text); nothing was typed.",
+                                }
+                            elif pre.get("readonly"):
                                 # Explicit, instant answer for "try to edit a read-only
                                 # field" steps - previously fill() waited out the full
                                 # action timeout and returned a vague TimeoutError.
@@ -1356,6 +1369,12 @@ def execute_test_case(
                             else:
                                 loc.fill(inp["text"])
                                 result_payload = {"ok": True, "value_now": _read_back_value(loc, pre.get("field_label", ""))}
+                                if pre.get("pointer_locked"):
+                                    # Not refused: some UIs overlay a custom widget on a
+                                    # pointer-events:none input and fill() through it is the
+                                    # normal path. The agent judges against the steps.
+                                    result_payload["note"] = ("This field cannot be clicked by a mouse user (pointer-events: none); "
+                                                              "the automation typed into it directly. Judge any read-only step with that in mind.")
                             step_log.append("Entered text into a field")
                             if rl is not None:
                                 # action-type redaction: never log inp["text"], regardless
