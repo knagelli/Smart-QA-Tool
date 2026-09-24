@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
 <title>Req2QA — See It In Action</title>
-<meta name="description" content="A genuine Req2QA run against OrangeHRM's public demo — requirements in, validated test coverage out, real live-execution results.">
+<meta name="description" content="Genuine Req2QA runs against a ServiceNow developer instance and OrangeHRM's public demo — requirements in, validated test coverage out, real live-execution results.">
 <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
 {% if canonical_url %}<link rel="canonical" href="{{ canonical_url }}">{% endif %}
 </head>
@@ -17,6 +17,79 @@
     <p class="sub">A genuine Req2QA run — not a mockup. Requirements in, validated test coverage out, real live-execution results.</p>
   </header>
 
+  <!-- ServiceNow proof section (2026-09-24). Only results independently
+       verified against their screenshots are shown - see
+       claude/servicenow-11-case-batch-review-and-evidence-gate-2026-09-24.md -->
+  <h2 style="margin:8px 0 10px">ServiceNow &mdash; Incident Management</h2>
+  <div class="alert alert-info" style="font-style:italic;font-size:12.5px">
+    <strong>ServiceNow is a trademark of ServiceNow, Inc.</strong> This demonstration uses a ServiceNow Personal Developer Instance with its standard demo data (names such as &ldquo;Abel Tuter&rdquo; are ServiceNow&rsquo;s built-in sample users, not real people). Req2QA is not affiliated with, sponsored by, or endorsed by ServiceNow.
+  </div>
+
+  <div class="card" style="line-height:1.75;margin-bottom:28px">
+    <h3 style="margin-bottom:8px">Input &mdash; excerpts from a sample requirements document</h3>
+    <p class="opt" style="margin-bottom:6px">The requirements below come from a sample Incident Management requirements document written for this demonstration &mdash; the kind of document a client would supply.</p>
+    <p class="opt" style="margin-bottom:16px">
+      1.2 The system must auto-generate a unique Incident Number (format INC#######) when a new incident record is created.<br>
+      1.4 The &ldquo;Caller&rdquo; field must &hellip; allow free-text entry that creates a new caller record automatically if no match exists.<br>
+      1.8 The &ldquo;Channel&rdquo; field &hellip; must default to a sensible value when the incident is created through the standard form.
+    </p>
+
+    <h3 style="margin-bottom:8px">Output &mdash; 3 of the 11 test cases from this run</h3>
+    <p class="opt" style="margin-bottom:12px">Req2QA generated 11 test cases from the requirements document and executed them unattended in a real browser. We show the three we have independently checked against their screenshots &mdash; including two where the software did <em>not</em> meet its requirement. The remaining results from this run are still under review, and we don&rsquo;t publish a result until it has been checked.</p>
+    <div style="overflow-x:auto;margin-bottom:16px"><table style="width:100%;border-collapse:collapse;font-size:13.5px">
+      <tr style="background:var(--sky)">
+        <th style="text-align:left;padding:8px 10px">ID</th>
+        <th style="text-align:left;padding:8px 10px">Test case</th>
+        <th style="text-align:left;padding:8px 10px">Req.</th>
+        <th style="text-align:left;padding:8px 10px">Result</th>
+      </tr>
+      <tr>
+        <td style="padding:8px 10px;border-top:1px solid var(--border);font-family:monospace;color:var(--blue);font-weight:700;white-space:nowrap">TC-003</td>
+        <td style="padding:8px 10px;border-top:1px solid var(--border)">Create two incidents and confirm each receives a different Incident Number</td>
+        <td style="padding:8px 10px;border-top:1px solid var(--border)">1.2</td>
+        <td style="padding:8px 10px;border-top:1px solid var(--border)"><span class="status-badge covered">PASS</span></td>
+      </tr>
+      <tr>
+        <td style="padding:8px 10px;border-top:1px solid var(--border);font-family:monospace;color:var(--blue);font-weight:700;white-space:nowrap">TC-014</td>
+        <td style="padding:8px 10px;border-top:1px solid var(--border)">Channel field has a sensible default on a new incident</td>
+        <td style="padding:8px 10px;border-top:1px solid var(--border)">1.8</td>
+        <td style="padding:8px 10px;border-top:1px solid var(--border)"><span class="status-badge gap">FAIL</span></td>
+      </tr>
+      <tr>
+        <td style="padding:8px 10px;border-top:1px solid var(--border);font-family:monospace;color:var(--blue);font-weight:700;white-space:nowrap">TC-007</td>
+        <td style="padding:8px 10px;border-top:1px solid var(--border)">Free-text Caller that doesn&rsquo;t exist is auto-created</td>
+        <td style="padding:8px 10px;border-top:1px solid var(--border)">1.4</td>
+        <td style="padding:8px 10px;border-top:1px solid var(--border)"><span class="status-badge gap">FAIL</span></td>
+      </tr>
+    </table></div>
+    <p class="opt" style="margin-bottom:8px">Both FAILs are gaps between this sample requirements document and how the developer instance is configured &mdash; the instance doesn&rsquo;t do what the document asks. They are not defects in ServiceNow itself; they show Req2QA reporting a mismatch rather than assuming a PASS.</p>
+    <p class="opt" style="margin-bottom:20px"><i>Executed 24 September 2026 (Australian time) against a live ServiceNow developer instance. Times inside the screenshots are shown in the instance&rsquo;s own time zone.</i></p>
+
+    <h3 style="margin-bottom:6px">Live execution &mdash; real screenshots from this run</h3>
+    <p class="opt" style="margin-bottom:12px">Cropped to the evidence; click any screenshot to view it full size.</p>
+    <div style="margin-bottom:20px">
+      <button type="button" class="js-proof-zoom" data-full="/static/proof/sn_tc003.png" style="display:block;width:100%;padding:0;border:1px solid var(--border);border-radius:10px;background:none;cursor:zoom-in;box-shadow:none">
+        <img src="/static/proof/sn_tc003.png" alt="TC-003 result: two new incidents with different numbers in the incident list" style="width:100%;display:block;border-radius:9px">
+      </button>
+      <p class="opt" style="margin-top:8px"><strong>TC-003 &mdash; PASS.</strong> Both test incidents appear in the list with different numbers, INC0010009 and INC0010010.</p>
+    </div>
+    <div style="margin-bottom:20px">
+      <button type="button" class="js-proof-zoom" data-full="/static/proof/sn_tc014.png" style="display:block;width:100%;padding:0;border:1px solid var(--border);border-radius:10px;background:none;cursor:zoom-in;box-shadow:none">
+        <img src="/static/proof/sn_tc014.png" alt="TC-014 result: new incident form with Channel showing None" style="width:100%;display:block;border-radius:9px">
+      </button>
+      <p class="opt" style="margin-top:8px"><strong>TC-014 &mdash; FAIL.</strong> A brand-new incident opens with Channel set to &ldquo;&ndash;&ndash; None &ndash;&ndash;&rdquo;. Requirement 1.8 asks for a sensible default &mdash; this instance doesn&rsquo;t provide one.</p>
+    </div>
+    <div style="margin-bottom:8px">
+      <button type="button" class="js-proof-zoom" data-full="/static/proof/sn_tc007.png" style="display:block;width:100%;padding:0;border:1px solid var(--border);border-radius:10px;background:none;cursor:zoom-in;box-shadow:none">
+        <img src="/static/proof/sn_tc007.png" alt="TC-007 result: Caller field rejects free text with Invalid reference" style="width:100%;display:block;border-radius:9px">
+      </button>
+      <p class="opt" style="margin-top:8px"><strong>TC-007 &mdash; FAIL.</strong> Typing a caller who doesn&rsquo;t exist is rejected with &ldquo;Invalid reference&rdquo;; no record is offered or created. Requirement 1.4 expects the new caller to be created automatically.</p>
+    </div>
+
+    <div class="alert alert-warn" style="margin-top:20px">Why show failures? Because finding where software falls short of its written requirements is the job. A tool that only ever reports PASS isn&rsquo;t testing anything.</div>
+  </div>
+
+  <h2 style="margin:8px 0 10px">OrangeHRM &mdash; Employee management</h2>
   <div class="alert alert-info" style="font-style:italic;font-size:12.5px">
     <strong>OrangeHRM is a trademark of OrangeHRM Inc.</strong> This demonstration uses OrangeHRM's own public, open-source demo environment. Req2QA is not affiliated with, sponsored by, or endorsed by OrangeHRM.
   </div>
@@ -30,7 +103,7 @@
 
     <h3 style="margin-bottom:8px">Output — 3 of the test cases from this run</h3>
     <p class="opt" style="margin-bottom:12px">Typical engagements run 25&ndash;300 test cases; this is a genuine excerpt, not a curated best case.</p>
-    <table style="width:100%;border-collapse:collapse;margin-bottom:16px;font-size:13.5px">
+    <div style="overflow-x:auto;margin-bottom:16px"><table style="width:100%;border-collapse:collapse;font-size:13.5px">
       <tr style="background:var(--sky)">
         <th style="text-align:left;padding:8px 10px">ID</th>
         <th style="text-align:left;padding:8px 10px">Test case</th>
@@ -38,24 +111,24 @@
         <th style="text-align:left;padding:8px 10px">Result</th>
       </tr>
       <tr>
-        <td style="padding:8px 10px;border-top:1px solid var(--border);font-family:monospace;color:var(--blue);font-weight:700">TC-001</td>
+        <td style="padding:8px 10px;border-top:1px solid var(--border);font-family:monospace;color:var(--blue);font-weight:700;white-space:nowrap">TC-001</td>
         <td style="padding:8px 10px;border-top:1px solid var(--border)">Add new employee with first, middle, and last name</td>
         <td style="padding:8px 10px;border-top:1px solid var(--border)">Happy path</td>
         <td style="padding:8px 10px;border-top:1px solid var(--border)"><span class="status-badge covered">PASS</span></td>
       </tr>
       <tr>
-        <td style="padding:8px 10px;border-top:1px solid var(--border);font-family:monospace;color:var(--blue);font-weight:700">TC-003</td>
+        <td style="padding:8px 10px;border-top:1px solid var(--border);font-family:monospace;color:var(--blue);font-weight:700;white-space:nowrap">TC-003</td>
         <td style="padding:8px 10px;border-top:1px solid var(--border)">Attempt to add employee without a last name</td>
         <td style="padding:8px 10px;border-top:1px solid var(--border)">Negative / validation</td>
         <td style="padding:8px 10px;border-top:1px solid var(--border)"><span class="status-badge covered">PASS</span></td>
       </tr>
       <tr>
-        <td style="padding:8px 10px;border-top:1px solid var(--border);font-family:monospace;color:var(--blue);font-weight:700">TC-007</td>
+        <td style="padding:8px 10px;border-top:1px solid var(--border);font-family:monospace;color:var(--blue);font-weight:700;white-space:nowrap">TC-007</td>
         <td style="padding:8px 10px;border-top:1px solid var(--border)">Attach a valid JPG profile photo within the 1MB limit</td>
         <td style="padding:8px 10px;border-top:1px solid var(--border)">Edge case</td>
         <td style="padding:8px 10px;border-top:1px solid var(--border)"><span class="status-badge covered">PASS</span></td>
       </tr>
-    </table>
+    </table></div>
     <p class="opt" style="margin-bottom:20px"><i>3 test cases executed, 3 passed, 0 failed, 0 blocked. Executed 2026-09-21.</i></p>
 
     <h3 style="margin-bottom:6px">Live execution — real screenshots from this run</h3>
