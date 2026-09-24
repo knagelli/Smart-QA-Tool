@@ -261,11 +261,11 @@ _ELEMENT_INFO_JS = """
     try {
         if (el.labels && el.labels.length) field_label = el.labels[0].innerText;
         if (!field_label && el.getAttribute('aria-labelledby')) {
-            field_label = el.getAttribute('aria-labelledby').split(/\s+/)
+            field_label = el.getAttribute('aria-labelledby').split(/\\s+/)
                 .map(id => { const n = document.getElementById(id); return n ? n.innerText : ''; }).join(' ');
         }
     } catch (e) {}
-    field_label = (field_label || '').replace(/\s+/g, ' ').replace(/^[*\s]+/, '').trim().slice(0, 80);
+    field_label = (field_label || '').replace(/\\s+/g, ' ').replace(/^[*\\s]+/, '').trim().slice(0, 80);
     const readonly = !!(el.readOnly || el.disabled || el.getAttribute('aria-readonly') === 'true' || el.getAttribute('aria-disabled') === 'true');
     let pointer_locked = false;
     try { pointer_locked = getComputedStyle(el).pointerEvents === 'none'; } catch (e) {}
@@ -745,98 +745,82 @@ def _pass_review_message(test_case: dict, form_fields: list) -> dict:
 _MASK_FIELD_SELECTOR = 'input, textarea, select, [role="textbox"]'
 
 
+# 2026-09-24 (TC-002 run: one screenshot took 13m52s). Masking used to
+# query each field ONE AT A TIME (locator.nth(i).evaluate, up to 200 per
+# frame, then the same again to unmask), each call inheriting the page's
+# 10s default wait. Right after Submit the page navigated away, every
+# counted field had vanished, and each call waited its full 10s before
+# giving up. It is now ONE evaluate_all call per frame for masking and one
+# for unmasking: evaluate_all never waits for elements, so a navigating page
+# costs milliseconds, not minutes. Detection is also stronger: besides the
+# attribute keywords it now checks the field's visible <label> /
+# aria-labelledby text and always masks type=password.
+_MASK_ALL_JS = """
+(els, keywords) => {
+    let n = 0;
+    for (const el of els) {
+        try {
+            let text = [el.getAttribute('aria-label'), el.getAttribute('placeholder'),
+                        el.getAttribute('name'), el.id].join(' ');
+            if (el.labels) for (const l of el.labels) text += ' ' + l.innerText;
+            const lb = el.getAttribute('aria-labelledby');
+            if (lb) for (const id of lb.split(/\\s+/)) {
+                const node = document.getElementById(id); if (node) text += ' ' + node.innerText;
+            }
+            text = text.toLowerCase();
+            const isPw = (el.getAttribute('type') || '').toLowerCase() === 'password';
+            if (isPw || keywords.some(k => text.includes(k))) {
+                if (el.dataset.req2qaPrevStyle === undefined) el.dataset.req2qaPrevStyle = el.getAttribute('style') || '';
+                el.style.setProperty('background', '#111', 'important');
+                el.style.setProperty('color', 'transparent', 'important');
+                el.style.setProperty('border-radius', '3px', 'important');
+                n++;
+            }
+        } catch (e) {}
+    }
+    return n;
+}
+"""
+
+_UNMASK_ALL_JS = """
+(els) => {
+    for (const el of els) {
+        try {
+            if (el.dataset.req2qaPrevStyle !== undefined) {
+                if (el.dataset.req2qaPrevStyle === '') el.removeAttribute('style');
+                else el.setAttribute('style', el.dataset.req2qaPrevStyle);
+                delete el.dataset.req2qaPrevStyle;
+            }
+        } catch (e) {}
+    }
+}
+"""
+
+
 def _mask_critical_fields(page):
-    """Opaquely mask any currently-visible critical-category field before a
-    screenshot; call _unmask() again right after the screenshot is taken.
-
-    Previously this added a class via a raw `document.querySelectorAll` and
-    relied on an externally-injected <style> tag to render it opaque. Two
-    problems, both fixed here: (1) the raw query couldn't see a field inside
-    a shadow root at all - same class of gap as _snapshot_elements above -
-    so a password/credential field rendered inside a shadow-DOM component
-    would never be found or masked; (2) even if it HAD been found, shadow
-    DOM's style encapsulation means a class fed by a light-DOM stylesheet
-    does not reach into a shadow root, so the mask would silently fail to
-    render even on a correctly-found element. Both are fixed by (a)
-    enumerating via Playwright's locator engine, which pierces open shadow
-    roots, and (b) setting the masked appearance as inline style directly on
-    the element, which always applies regardless of shadow boundaries - no
-    external stylesheet involved.
-
-    IFRAMES: walks every visible frame via _visible_frames(), same as
-    _snapshot_elements - this was the single most important place for that
-    gap to exist, more so than the snapshot logic itself. A password field
-    rendered inside an iframe (common for SSO logins embedded via an
-    identity-provider iframe - Okta, Azure AD, etc. all do this) was
-    previously invisible to this function exactly like a shadow-DOM field
-    was, meaning it could render UNMASKED in a saved screenshot - a direct
-    violation of the CREDENTIAL HANDLING contract at the top of this file.
-    Deliberately no per-frame element cap here (unlike the 200-element
-    budget in _snapshot_elements) and no origin filtering - masking is a
-    security control, not an agent-facing convenience, so thoroughness
-    matters more than staying under some prompt-size budget; there is no
-    prompt here to bloat. See claude/servicenow-iframe-fix-2026-09-22.md."""
+    """Opaquely mask every visible critical-category field before a
+    screenshot; call _unmask() right after. Walks every visible frame
+    (iframes, e.g. SSO/IdP logins) and pierces open shadow roots via
+    Playwright's locator engine; the mask is inline style so it also
+    renders inside shadow DOM. See the note above _MASK_ALL_JS for why this
+    is a single call per frame. No element cap: masking is a security
+    control, not an agent-facing budget. Never raises."""
     marked = 0
     for frame in _visible_frames(page):
         try:
-            locator = frame.locator(_MASK_FIELD_SELECTOR)
-            count = min(locator.count(), 200)
+            marked += frame.locator(_MASK_FIELD_SELECTOR).evaluate_all(_MASK_ALL_JS, CRITICAL_FIELD_KEYWORDS + EVIDENCE_SENSITIVE_KEYWORDS)
         except Exception:
+            # A frame navigating away / detached - nothing left to mask there.
             continue
-        for i in range(count):
-            try:
-                was_masked = locator.nth(i).evaluate(
-                    """
-                    (el, keywords) => {
-                        const label = (
-                            (el.getAttribute('aria-label') || '') + ' ' +
-                            (el.getAttribute('placeholder') || '') + ' ' +
-                            (el.getAttribute('name') || '') + ' ' +
-                            (el.id || '')
-                        ).toLowerCase();
-                        if (keywords.some(k => label.includes(k))) {
-                            el.dataset.req2qaPrevStyle = el.getAttribute('style') || '';
-                            el.style.setProperty('background', '#111', 'important');
-                            el.style.setProperty('color', 'transparent', 'important');
-                            el.style.setProperty('border-radius', '3px', 'important');
-                            return true;
-                        }
-                        return false;
-                    }
-                    """,
-                    CRITICAL_FIELD_KEYWORDS,
-                )
-            except Exception:
-                continue
-            if was_masked:
-                marked += 1
     return marked
 
 
 def _unmask(page):
-    # Must walk the same frames _mask_critical_fields did, for the same
-    # reason _element_locator must match _snapshot_elements's walk - see
-    # _mask_critical_fields's docstring for why iframes matter here.
     for frame in _visible_frames(page):
         try:
-            locator = frame.locator(_MASK_FIELD_SELECTOR)
-            count = min(locator.count(), 200)
+            frame.locator(_MASK_FIELD_SELECTOR).evaluate_all(_UNMASK_ALL_JS)
         except Exception:
             continue
-        for i in range(count):
-            try:
-                locator.nth(i).evaluate(
-                    """
-                    (el) => {
-                        if (el.dataset.req2qaPrevStyle !== undefined) {
-                            el.setAttribute('style', el.dataset.req2qaPrevStyle);
-                            delete el.dataset.req2qaPrevStyle;
-                        }
-                    }
-                    """
-                )
-            except Exception:
-                continue
 
 
 def _capture_screenshot(page, shots_dir: Path, label: str, rl=None, step_num: Optional[int] = None) -> str:
