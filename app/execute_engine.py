@@ -33,6 +33,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -100,7 +101,48 @@ PASS_RECHECK_EXTRA_STEPS = 4
 # harness rejects it otherwise; after CLAUSE_EVIDENCE_MAX_REJECTIONS the
 # verdict becomes BLOCKED ("PASS could not be substantiated") rather than an
 # unsupported PASS. Flip ENABLE_CLAUSE_EVIDENCE_GATE to False to revert.
-ENABLE_CLAUSE_EVIDENCE_GATE = True
+ENABLE_CLAUSE_EVIDENCE_GATE = os.environ.get("REQ2QA_CLAUSE_EVIDENCE_GATE", "1").strip().lower() not in ("0", "false", "no", "off")
+
+# ---------------------------------------------------------------------------
+# Token efficiency (2026-09-24). Measured on a ServiceNow-shaped synthetic
+# page, 32-call create-incident flow: the build before this change sent
+# ~2.14M input tokens per test case (largest call ~124k) vs ~0.82M before
+# the snapshot-budget fix - and Bedrock's cross-region tokens-per-minute
+# quota started returning 429 for whole batches. Three levers, each with its
+# own off-switch so any one can be reverted without touching the others:
+#   COMPACT_SNAPSHOT_ENCODING - same information, fewer bytes (frame URL
+#       sent once per snapshot instead of on every element; always-true /
+#       empty keys dropped).
+#   HISTORY_KEEP_SNAPSHOTS - only the latest N page snapshots are re-sent in
+#       the conversation; older ones become a one-line note. All actions and
+#       their results stay. 0 disables (every snapshot re-sent, old behavior).
+#   TPM pacing - before each model call, wait if sending it would exceed a
+#       tokens-per-minute budget shared by every run in this process.
+# See claude/token-efficiency-impact-analysis-2026-09-24.md.
+# ---------------------------------------------------------------------------
+def _env_flag(name: str, default: bool) -> bool:
+    v = os.environ.get(name)
+    return default if v is None or v.strip() == "" else v.strip().lower() not in ("0", "false", "no", "off")
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, "").strip() or default)
+    except ValueError:
+        return default
+
+
+# Each lever can be switched off on the server without a code change
+# (edit the systemd unit's Environment= lines, then restart):
+#   REQ2QA_COMPACT_SNAPSHOTS=0, REQ2QA_HISTORY_KEEP_SNAPSHOTS=0, REQ2QA_TPM_BUDGET=0
+COMPACT_SNAPSHOT_ENCODING = _env_flag("REQ2QA_COMPACT_SNAPSHOTS", True)
+HISTORY_KEEP_SNAPSHOTS = _env_int("REQ2QA_HISTORY_KEEP_SNAPSHOTS", 2)
+# 0 disables pacing. Set REQ2QA_TPM_BUDGET on the server to ~80% of the
+# account's Bedrock tokens-per-minute quota for the model in use.
+TPM_BUDGET = _env_int("REQ2QA_TPM_BUDGET", 0)
+TPM_MAX_WAIT_SECONDS = 90
+# Rough size of the fixed tools list in tokens, added to pacing estimates.
+TOOLS_TOKEN_ESTIMATE = 2500
 CLAUSE_EVIDENCE_MAX_REJECTIONS = 2
 CLAUSE_EVIDENCE_EXTRA_STEPS = 3
 # Wording that signals an assumption rather than an observation. Heuristic
@@ -698,6 +740,138 @@ def _safe_value_for_model(label: str, value) -> Optional[str]:
     return value[:EVIDENCE_MAX_VALUE_CHARS] + "..." if len(value) > EVIDENCE_MAX_VALUE_CHARS else value
 
 
+def _compact_snapshot_elements(elements: list) -> tuple:
+    """COMPACT_SNAPSHOT_ENCODING: returns (elements, frames). Every element
+    of a non-main frame used to carry the full frame URL (~140 chars on
+    ServiceNow, ~47% of a snapshot); it now carries a short frame index and
+    the URLs are listed once in `frames`. 'visible' (always true for kept
+    elements) and empty 'type'/'role' are dropped. No information is lost:
+    the frame index is also recoverable from ref // GLOBAL_REF_FRAME_MULTIPLIER."""
+    frames = {}
+    out = []
+    for e in elements:
+        m = {k: v for k, v in e.items() if not (k == "visible" or (k in ("type", "role") and not v))}
+        fu = m.pop("frame_url", None)
+        if fu is not None:
+            idx = str(e.get("ref", 0) // GLOBAL_REF_FRAME_MULTIPLIER)
+            frames[idx] = fu
+            m["frame"] = int(idx)
+        out.append(m)
+    return out, frames
+
+
+def _snapshot_stub(payload: dict) -> str:
+    """What an older page snapshot is replaced with in the conversation
+    re-sent to the model (HISTORY_KEEP_SNAPSHOTS)."""
+    # Filled field values survive (already masked for the model) so a test
+    # that compares values across pages - e.g. TC-003's two incident numbers -
+    # keeps what it saw earlier. Found by the round-2 devil's advocate.
+    filled = []
+    for e in payload.get("elements", []) or []:
+        v = e.get("value")
+        if v in (None, "", "(empty)"):
+            continue
+        name = e.get("field_label") or e.get("label") or ""
+        filled.append(f"{str(name)[:40]}: {str(v)[:60]}")
+        if len(filled) >= 30:
+            break
+    return json.dumps({
+        "older_snapshot_omitted": True,
+        "url": str(payload.get("url", ""))[:200],
+        "title": str(payload.get("title", ""))[:120],
+        "element_count": len(payload.get("elements", []) or []),
+        "filled_fields_seen": filled,
+        "note": ("Superseded by a newer snapshot. Element refs from this snapshot may no longer "
+                 "be valid - call get_snapshot if you need to see this page again."),
+    })
+
+
+def _messages_for_model(messages: list, keep: int) -> list:
+    """HISTORY_KEEP_SNAPSHOTS: a copy of the conversation in which only the
+    latest `keep` get_snapshot results are sent in full. The stored
+    conversation is never modified. tool_use/tool_result pairing and order
+    are preserved exactly (only the result *content* string changes)."""
+    if not keep or keep <= 0:
+        return messages
+    snap_positions = []  # (msg_index, block_index)
+    for mi, m in enumerate(messages):
+        if m["role"] != "user" or not isinstance(m["content"], list):
+            continue
+        for bi, b in enumerate(m["content"]):
+            if isinstance(b, dict) and b.get("type") == "tool_result":
+                c = b.get("content")
+                if isinstance(c, str) and c.startswith("{") and '"elements"' in c:
+                    try:
+                        is_snap = isinstance(json.loads(c).get("elements"), list)
+                    except Exception:
+                        is_snap = False
+                    if is_snap:
+                        snap_positions.append((mi, bi))
+    stale = set(snap_positions[:-keep])
+    if not stale:
+        return messages
+    out = []
+    for mi, m in enumerate(messages):
+        if any(p[0] == mi for p in stale):
+            blocks = []
+            for bi, b in enumerate(m["content"]):
+                if (mi, bi) in stale:
+                    try:
+                        payload = json.loads(b["content"])
+                    except Exception:
+                        payload = {}
+                    b = dict(b); b["content"] = _snapshot_stub(payload)
+                blocks.append(b)
+            out.append({"role": m["role"], "content": blocks})
+        else:
+            out.append(m)
+    return out
+
+
+class _TpmPacer:
+    """Process-wide tokens-per-minute pacing (TPM_BUDGET). Before a model
+    call, wait until the estimated input tokens of the last 60s plus this
+    call fit the budget. Estimates from request size (~4 bytes/token) and is
+    corrected with the real usage AWS returns. Never waits longer than
+    TPM_MAX_WAIT_SECONDS for one call; a call bigger than the whole budget is
+    sent after the window clears rather than blocking forever."""
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._events = []  # (timestamp, tokens)
+
+    def _used(self, now):
+        self._events = [(t, n) for t, n in self._events if now - t < 60]
+        return sum(n for _, n in self._events)
+
+    def wait_turn(self, est_tokens: int, budget: int) -> float:
+        if budget <= 0:
+            return 0.0
+        waited = 0.0
+        while True:
+            with self._lock:
+                now = time.time()
+                used = self._used(now)
+                if used + est_tokens <= budget or not self._events or waited >= TPM_MAX_WAIT_SECONDS:
+                    self._events.append((now, est_tokens))
+                    return waited
+                oldest = min(t for t, _ in self._events)
+                pause = max(0.5, min(60 - (now - oldest) + 0.1, TPM_MAX_WAIT_SECONDS - waited))
+            time.sleep(pause)
+            waited += pause
+
+    def correct(self, est_tokens: int, actual_tokens: int):
+        if not actual_tokens:
+            return
+        with self._lock:
+            for i in range(len(self._events) - 1, -1, -1):
+                if self._events[i][1] == est_tokens:
+                    self._events[i] = (self._events[i][0], actual_tokens)
+                    break
+
+
+_TPM_PACER = _TpmPacer()
+
+
 def _elements_for_model(elements: list) -> list:
     """Strip internal bookkeeping and mask values before the model sees a
     snapshot. value/readonly are only included when meaningful, to keep the
@@ -751,7 +925,28 @@ def _form_diff(before: list, after: list) -> list:
     return changes
 
 
-def _clause_evidence_problems(ce) -> list:
+def _inside_test_text(text: str, start: int, end: int, test_text: str) -> bool:
+    """True when the flagged words at text[start:end] are part of a longer
+    phrase copied verbatim from the test case (its steps / expected result /
+    precondition) - e.g. test data like 'AutoTest_22f001 - Unable to access
+    email'. Found live on ServiceNow TC-001 (2026-09-24): quoting that
+    Short description tripped the 'unable to' contradiction marker, and a
+    genuine PASS became BLOCKED because the agent could not reword test data.
+    Deliberately NOT a blanket "ignore quoted text" rule - that would let an
+    agent hide 'it would be read-only' in quotes; only text that really is in
+    the test case is exempt."""
+    if not test_text:
+        return False
+    low_text, low_test = text.lower(), test_text.lower()
+    min_len = (end - start) + 8   # the flagged words plus real surrounding context
+    for length in range(min_len, min(len(low_text), min_len + 40) + 1):
+        for s0 in range(max(0, end - length), min(start, len(low_text) - length) + 1):
+            if low_text[s0:s0 + length] in low_test:
+                return True
+    return False
+
+
+def _clause_evidence_problems(ce, test_text: str = "") -> list:
     """Problems that stop a PASS being accepted, as plain sentences for the
     agent. Empty list = acceptable. Checks structure and wording only; it
     cannot prove an observation is true (that is what the evidence table
@@ -772,10 +967,14 @@ def _clause_evidence_problems(ce) -> list:
             problems.append(f"'{clause[:80]}' has no concrete observation")
         else:
             low = observed.lower()
-            hits = [m.strip() for m in _ASSUMPTION_MARKERS if m in low]
+            hits = [m.strip() for m in _ASSUMPTION_MARKERS
+                    if any(not _inside_test_text(observed, x.start(), x.end(), test_text)
+                           for x in re.finditer(re.escape(m), low))]
             if hits:
                 problems.append(f"'{clause[:80]}' evidence reads as an assumption ({', '.join(hits)}) - state what you actually saw")
-            contra = [pat.replace("\\b", "") for pat in _CONTRADICTION_PATTERNS if re.search(pat, low)]
+            contra = [pat.replace("\\b", "") for pat in _CONTRADICTION_PATTERNS
+                      if any(not _inside_test_text(observed, x.start(), x.end(), test_text)
+                             for x in re.finditer(pat, low))]
             if status == "met" and contra:
                 problems.append(f"'{clause[:80]}' is marked met but the observation says otherwise ({', '.join(contra)}) - "
                                 "if the clause did not hold, the verdict is FAIL; if it did, describe what you saw that shows it")
@@ -1206,6 +1405,7 @@ def execute_test_case(
             screenshots.append(_capture_screenshot(page, shots_dir, "start", rl=rl, step_num=0))
             verdict, notes = None, ""
             notes_for_log = None
+            usage_totals = {"calls": 0, "input": 0, "cache_read": 0, "cache_write": 0, "output": 0, "max_call_input": 0}
             last_fingerprint = None
             stall_count = 0
             # Lazily created on the first upload_file call and reused for
@@ -1227,6 +1427,8 @@ def execute_test_case(
             pass_recheck_done = False
             recheck_changes = []
             clause_rejections = 0
+            # Test-case text used to exempt quoted test data from the wording checks.
+            tc_text = " ".join(str(test_case.get(k, "")) for k in ("title", "precondition", "steps", "expected_result"))
             accepted_clause_evidence = None
 
             for step_num in range(MAX_AGENT_STEPS + PASS_REVIEW_EXTRA_STEPS):
@@ -1247,6 +1449,17 @@ def execute_test_case(
                 # (the exact defect this session spent significant time
                 # diagnosing from a bare 403 traceback) is diagnosable in
                 # seconds from the log, not by re-deriving it from scratch.
+                messages_to_send = _messages_for_model(messages, HISTORY_KEEP_SNAPSHOTS)
+                est_tokens = 0
+                if TPM_BUDGET > 0:
+                    try:
+                        est_tokens = (len(system_prompt) + len(json.dumps(messages_to_send, default=str))) // 4 + TOOLS_TOKEN_ESTIMATE
+                    except Exception:
+                        est_tokens = 0
+                    paced = _TPM_PACER.wait_turn(est_tokens, TPM_BUDGET)
+                    if paced and rl is not None:
+                        rl.event("step", {"step": step_num, "action": "tpm_pacing", "waited_s": round(paced, 1),
+                                          "est_tokens": est_tokens, "budget": TPM_BUDGET})
                 for attempt, backoff in enumerate([0] + RATE_LIMIT_BACKOFF_SECONDS):
                     if backoff:
                         time.sleep(backoff)
@@ -1263,7 +1476,7 @@ def execute_test_case(
                             # 5-minute cache window and read back at ~10% cost after.
                             system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
                             tools=TOOLS,
-                            messages=messages,
+                            messages=messages_to_send,
                         )
                         break
                     except PermissionDeniedError as e:
@@ -1283,6 +1496,26 @@ def execute_test_case(
                                 "attempt": attempt + 1, "next_backoff_s": RATE_LIMIT_BACKOFF_SECONDS[attempt],
                             })
                         continue
+                # Real token usage as reported by the provider - the measurement
+                # every efficiency change is judged on. Never raises.
+                try:
+                    u = getattr(response, "usage", None)
+                    if u is not None:
+                        in_t = int(getattr(u, "input_tokens", 0) or 0)
+                        c_read = int(getattr(u, "cache_read_input_tokens", 0) or 0)
+                        c_write = int(getattr(u, "cache_creation_input_tokens", 0) or 0)
+                        out_t = int(getattr(u, "output_tokens", 0) or 0)
+                        usage_totals["input"] += in_t; usage_totals["cache_read"] += c_read
+                        usage_totals["cache_write"] += c_write; usage_totals["output"] += out_t
+                        usage_totals["calls"] += 1
+                        usage_totals["max_call_input"] = max(usage_totals["max_call_input"], in_t + c_read + c_write)
+                        if TPM_BUDGET > 0 and est_tokens:
+                            _TPM_PACER.correct(est_tokens, in_t + c_read + c_write)
+                        if rl is not None:
+                            rl.event("usage", {"step": step_num, "input": in_t, "cache_read": c_read,
+                                               "cache_write": c_write, "output": out_t})
+                except Exception:
+                    pass
                 messages.append({"role": "assistant", "content": response.content})
 
                 tool_uses = [b for b in response.content if b.type == "tool_use"]
@@ -1316,10 +1549,17 @@ def execute_test_case(
                             # every single snapshot. Strip it here, after it's
                             # already been used for the fingerprint above.
                             elements_for_model = _elements_for_model(elements)
+                            snapshot_frames = None
+                            if COMPACT_SNAPSHOT_ENCODING:
+                                elements_for_model, snapshot_frames = _compact_snapshot_elements(elements_for_model)
                             result_payload = {
-                                "url": page.url, "title": page.title(), "elements": elements_for_model,
+                                "url": page.url, "title": page.title(),
+                                "elements": elements_for_model,
                                 "steps_remaining": step_limit - step_num - 1,
                             }
+                            if snapshot_frames:
+                                # frame index -> URL, listed once (COMPACT_SNAPSHOT_ENCODING)
+                                result_payload["frames"] = snapshot_frames
                             if snap_stats.get("omitted_keepable") or snap_stats.get("raw_capped_frames"):
                                 # Never truncate silently again: the agent must know
                                 # the page has more than it is being shown.
@@ -1370,7 +1610,7 @@ def execute_test_case(
                                             "label": (e.get("label") or "")[:80],
                                             "frame_url": e.get("frame_url"),
                                         }
-                                        for e in elements_for_model
+                                        for e in elements  # full list: the model's copy no longer carries frame_url
                                     ],
                                 })
                         elif name == "fill_login":
@@ -1593,8 +1833,8 @@ def execute_test_case(
                                                   "changed_fields": [c["field"] for c in recheck_changes]})
                         elif (name == "finish_test" and ENABLE_CLAUSE_EVIDENCE_GATE and inp.get("verdict") == "PASS"
                               and clause_rejections < CLAUSE_EVIDENCE_MAX_REJECTIONS
-                              and _clause_evidence_problems(inp.get("clause_evidence"))):
-                            problems = _clause_evidence_problems(inp.get("clause_evidence"))
+                              and _clause_evidence_problems(inp.get("clause_evidence"), tc_text)):
+                            problems = _clause_evidence_problems(inp.get("clause_evidence"), tc_text)
                             clause_rejections += 1
                             step_limit = max(step_limit, step_num + 1 + CLAUSE_EVIDENCE_EXTRA_STEPS)
                             result_payload = {
@@ -1610,19 +1850,23 @@ def execute_test_case(
                             }
                             step_log.append("PASS rejected: expected result not backed clause by clause")
                             if rl is not None:
+                                # Problem text so a rejection can be diagnosed from the log
+                                # (2026-09-24: TC-001's BLOCKED needed guesswork from counts).
+                                # Built from clause wording + flagged marker words only.
                                 rl.event("step", {"step": step_num, "action": "clause_evidence_rejected",
-                                                  "attempt": clause_rejections, "problem_count": len(problems)})
+                                                  "attempt": clause_rejections, "problem_count": len(problems),
+                                                  "problems": [p_[:200] for p_ in problems[:6]]})
                         elif name == "finish_test":
                             verdict = inp["verdict"]
                             notes = inp["notes"]
                             if (verdict == "PASS" and ENABLE_CLAUSE_EVIDENCE_GATE
-                                    and _clause_evidence_problems(inp.get("clause_evidence"))):
+                                    and _clause_evidence_problems(inp.get("clause_evidence"), tc_text)):
                                 # Out of rejections and still unsupported: an honest
                                 # BLOCKED beats an unsupported PASS.
                                 verdict = "BLOCKED"
                                 notes = ("req2qa could not accept this PASS: after repeated requests the agent did not "
                                          "back every clause of the expected result with an observation. Remaining issues: "
-                                         + "; ".join(_clause_evidence_problems(inp.get("clause_evidence"))[:5])
+                                         + "; ".join(_clause_evidence_problems(inp.get("clause_evidence"), tc_text)[:5])
                                          + ". Agent's notes: " + notes)
                             if verdict == "PASS":
                                 accepted_clause_evidence = inp.get("clause_evidence")
@@ -1719,6 +1963,7 @@ def execute_test_case(
     return {
         "verdict": verdict or "BLOCKED",
         "notes": notes or "No verdict was reached.",
+        "usage": usage_totals,
         # Same as notes, minus any field values the harness appended (run-log copy).
         "notes_for_log": notes_for_log if notes_for_log is not None else (notes or "No verdict was reached."),
         "step_log": step_log,
