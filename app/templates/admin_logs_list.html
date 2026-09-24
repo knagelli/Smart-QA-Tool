@@ -44,6 +44,12 @@
   </form>
 
   {% if results %}
+  <p class="muted">
+    {{ results|length }} matching run{{ '' if results|length == 1 else 's' }} —
+    <a href="/admin/logs/export.csv?q={{ q|urlencode }}&run_type={{ run_type|urlencode }}&status={{ status|urlencode }}">download as CSV (with token usage &amp; estimated cost)</a>
+    &middot;
+    <a href="/admin/logs/export.zip?q={{ q|urlencode }}&run_type={{ run_type|urlencode }}&status={{ status|urlencode }}">download raw logs (.zip)</a>
+  </p>
   <table>
     <tr><th>Started</th><th>Type</th><th>Run</th><th>Reference</th><th>Outcome</th></tr>
     {% for r in results %}
