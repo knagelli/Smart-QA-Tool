@@ -63,7 +63,11 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-INTERACTIVE_STREAK_MAX = 3
+# Stage 0 (2026-09-25): these were hardcoded constants; made env-configurable
+# so behaviour can be tuned per-deployment (or per onboarding scale) without a
+# code change. Defaults are UNCHANGED from the previous hardcoded values -
+# this alone must not change any running behaviour.
+INTERACTIVE_STREAK_MAX = _env_int("REQ2QA_INTERACTIVE_STREAK_MAX", 3)
 
 
 def rpm_limit() -> int:
@@ -132,9 +136,21 @@ class _RequestGate:
             self._cv.notify_all()
 
 
+def _env_cooldowns(name: str, default: list) -> list:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        parsed = [float(x.strip()) for x in raw.split(",") if x.strip()]
+        return parsed or default
+    except ValueError:
+        return default
+
+
 _GATE = _RequestGate()
-RATE_RETRY_ATTEMPTS = 6               # sends per logical request, incl. the first
-RATE_RETRY_COOLDOWNS = [8, 15, 30, 45, 60]   # seconds, applied to the whole gate
+# Stage 0 (2026-09-25): env-configurable, defaults unchanged.
+RATE_RETRY_ATTEMPTS = _env_int("REQ2QA_RATE_RETRY_ATTEMPTS", 6)      # sends per logical request, incl. the first
+RATE_RETRY_COOLDOWNS = _env_cooldowns("REQ2QA_RATE_RETRY_COOLDOWNS", [8, 15, 30, 45, 60])   # seconds, applied to the whole gate
 
 
 class _PacedMessages:

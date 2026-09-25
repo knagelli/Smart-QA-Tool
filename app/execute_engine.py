@@ -73,6 +73,9 @@ MAX_AGENT_STEPS = 60
 # verdict instead of grinding on to MAX_AGENT_STEPS. This is what actually
 # protects clients from the "sits there until the step limit" experience;
 # raising the cap alone would only make a genuine stall slower to report.
+# Stage 0 (2026-09-25): made env-configurable via REQ2QA_STALL_LIMIT below
+# (see _env_int, defined further down this file); the literal default here
+# stays 3 in case anything imports STALL_LIMIT before that reassignment runs.
 STALL_LIMIT = 3
 
 # PASS review gate (2026-09-23) - see claude/pass-review-gate-evidence-table-
@@ -152,6 +155,13 @@ _PAGE_CHANGING_TOOLS = ("click", "type_text", "select_option", "upload_file")
 # already on the page. Found in the round-2 review: without it the returned
 # page could be staler than the separate snapshot the agent used to take.
 PAGE_AFTER_ACTION_SETTLE_MS = _env_int("REQ2QA_PAGE_AFTER_ACTION_SETTLE_MS", 700)
+# Stage 0 (2026-09-25): STALL_LIMIT (declared above as a literal 3 for any
+# early import) is now overridden here from REQ2QA_STALL_LIMIT once _env_int
+# exists. Default unchanged.
+STALL_LIMIT = _env_int("REQ2QA_STALL_LIMIT", STALL_LIMIT)
+# Cost fix (2026-09-25): incremental conversation-history cache breakpoint.
+# REQ2QA_HISTORY_CACHE=0 reverts to full-price resend of history every step.
+HISTORY_CACHE_ENABLED = _env_flag("REQ2QA_HISTORY_CACHE", True)
 # Rough size of the fixed tools list in tokens, added to pacing estimates.
 TOOLS_TOKEN_ESTIMATE = 2500
 CLAUSE_EVIDENCE_MAX_REJECTIONS = 2
@@ -839,6 +849,49 @@ def _messages_for_model(messages: list, keep: int) -> list:
             out.append({"role": m["role"], "content": blocks})
         else:
             out.append(m)
+    return out
+
+
+def _with_history_cache_breakpoint(messages_to_send: list) -> list:
+    """Cost fix (2026-09-25, see claude/bedrock-cost-analysis-caching-gaps-
+    2026-09-25.md): the system prompt and tools list were already cached, but
+    the conversation history - which grows every step and is 90%+ identical
+    to the step before - was resent at full input price every single call.
+    Measured on a real 36-step run: cache_read stayed flat while uncached
+    input grew 337 -> 17,014 tokens; simulating an incremental cache
+    breakpoint here gave an estimated 75% cost reduction on that run.
+
+    Anthropic's prompt caching is prefix-based: placing cache_control on the
+    LAST content block of the message list caches everything up to and
+    including that block. On the next step, if that same prefix is sent
+    again unchanged plus new content appended after it, the prefix is served
+    from cache at ~10% of input price instead of full price - this is what
+    makes it "grow": each step's cache write becomes the next step's cache
+    read, for the part of history that hasn't changed.
+
+    This returns a NEW list (does not mutate `messages_to_send`, which may
+    be the original stored `messages` list when HISTORY_KEEP_SNAPSHOTS is
+    disabled) with a cache_control breakpoint added to the last block of the
+    last message. Total ephemeral breakpoints per request (tools + system +
+    this) stays at 3, under Anthropic's 4-breakpoint limit.
+
+    Cache hits require an EXACT match of the cached prefix. When
+    _messages_for_model rewrites an older snapshot into a stub (see above),
+    that step's history differs from what was cached before, so that one
+    step's cache is a miss - it still works, it's simply not free that one
+    time. This is expected and does not affect correctness."""
+    if not HISTORY_CACHE_ENABLED or not messages_to_send:
+        return messages_to_send
+    last_msg = messages_to_send[-1]
+    content = last_msg.get("content")
+    if not isinstance(content, list) or not content:
+        return messages_to_send
+    new_content = list(content)
+    last_block = dict(new_content[-1])
+    last_block["cache_control"] = {"type": "ephemeral"}
+    new_content[-1] = last_block
+    out = list(messages_to_send)
+    out[-1] = {**last_msg, "content": new_content}
     return out
 
 
@@ -1573,6 +1626,7 @@ def execute_test_case(
                 # diagnosing from a bare 403 traceback) is diagnosable in
                 # seconds from the log, not by re-deriving it from scratch.
                 messages_to_send = _messages_for_model(messages, HISTORY_KEEP_SNAPSHOTS)
+                messages_to_send = _with_history_cache_breakpoint(messages_to_send)
                 est_tokens = 0
                 if TPM_BUDGET > 0:
                     try:

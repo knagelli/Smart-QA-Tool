@@ -719,10 +719,19 @@ def _validate_env_url(url: str) -> bool:
 # even if only a sandbox) - throttled more tightly than analysis, and each
 # request is capped to a small number of test cases run sequentially in
 # isolated browser sessions.
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, "").strip() or default)
+    except ValueError:
+        return default
+
+
 _execution_calls: dict = defaultdict(deque)
 EXECUTION_RATE_MAX = 5
 EXECUTION_RATE_WINDOW_SECONDS = 30 * 60
-MAX_TEST_CASES_PER_EXECUTION = 25
+# Stage 0 (2026-09-25): env-configurable so a client's per-run cap can be
+# tuned without a code change as onboarding scale changes. Default unchanged.
+MAX_TEST_CASES_PER_EXECUTION = _env_int("REQ2QA_MAX_TEST_CASES_PER_EXECUTION", 25)
 EXECUTIONS_MAX_AGE_SECONDS = DOWNLOAD_LINK_TTL_SECONDS + 24 * 60 * 60
 
 # Tracks, per access code, the one live-execution batch currently running in

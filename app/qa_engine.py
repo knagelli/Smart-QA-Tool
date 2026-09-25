@@ -50,6 +50,21 @@ MODEL = os.environ.get("QA_MODEL", "claude-sonnet-4-6")
 # it wasted).
 QA_MAX_OUTPUT_TOKENS = 64000
 
+# Cost fix (2026-09-25, see claude/bedrock-cost-analysis-caching-gaps-2026-09-
+# 25.md): none of the five call sites in this file cached their system
+# prompt, so every generation/traceability/import/impact call paid full
+# input price for a large, static prompt every single time, for every
+# client. Wrapping it in this shape adds an ephemeral cache breakpoint -
+# defaults preserve exact current behaviour when disabled.
+_SYSTEM_CACHE_ENABLED = os.environ.get("REQ2QA_QA_SYSTEM_CACHE", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def _cached_system(prompt_text: str):
+    if not _SYSTEM_CACHE_ENABLED:
+        return prompt_text
+    return [{"type": "text", "text": prompt_text, "cache_control": {"type": "ephemeral"}}]
+
+
 SYSTEM_PROMPT = (
     "You are an expert QA Analyst and Requirements Traceability specialist. "
     "You validate whether requirements make sense for a named target application, "
@@ -232,7 +247,7 @@ def run_qa_analysis(application: str, requirements_text: str, api_key: str, max_
         model=ai_client.get_model_id(),
         max_tokens=QA_MAX_OUTPUT_TOKENS,
         temperature=0,
-        system=SYSTEM_PROMPT,
+        system=_cached_system(SYSTEM_PROMPT),
         messages=[{"role": "user", "content": prompt}],
     )
     # Logged unconditionally (success or eventual parse failure below) so the
@@ -402,7 +417,7 @@ def run_qa_analysis_custom(application: str, brief_text: str, flow: dict, requir
         model=ai_client.get_model_id(),
         max_tokens=QA_MAX_OUTPUT_TOKENS,
         temperature=0,
-        system=CUSTOM_SYSTEM_PROMPT,
+        system=_cached_system(CUSTOM_SYSTEM_PROMPT),
         messages=[{"role": "user", "content": prompt}],
     )
 
@@ -485,7 +500,7 @@ def structure_existing_test_cases(application: str, raw_text: str, api_key: str)
         model=ai_client.get_model_id(),
         max_tokens=QA_MAX_OUTPUT_TOKENS,
         temperature=0,
-        system=IMPORT_SYSTEM_PROMPT,
+        system=_cached_system(IMPORT_SYSTEM_PROMPT),
         messages=[{"role": "user", "content": prompt}],
     )
 
@@ -547,7 +562,7 @@ def match_requirements_to_test_cases(application: str, requirements_text: str, t
         model=ai_client.get_model_id(),
         max_tokens=QA_MAX_OUTPUT_TOKENS,
         temperature=0,
-        system=TRACEABILITY_SYSTEM_PROMPT,
+        system=_cached_system(TRACEABILITY_SYSTEM_PROMPT),
         messages=[{"role": "user", "content": prompt}],
     )
 
@@ -667,7 +682,7 @@ def analyze_requirements_impact(
         model=ai_client.get_model_id(),
         max_tokens=QA_MAX_OUTPUT_TOKENS,
         temperature=0,
-        system=IMPACT_SYSTEM_PROMPT,
+        system=_cached_system(IMPACT_SYSTEM_PROMPT),
         messages=[{"role": "user", "content": prompt}],
     )
 
