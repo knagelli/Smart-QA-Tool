@@ -22,6 +22,10 @@ VERDICT_BADGE = {
     "PASS": ('<span class="badge valid">PASS</span>', "row-valid"),
     "FAIL": ('<span class="badge gap">FAIL</span>', "row-flagged"),
     "BLOCKED": ('<span class="badge flagged">BLOCKED</span>', "row-flagged"),
+    # 2026-09-25 (Finding 1): a client-requested stop, never a test outcome -
+    # deliberately its own neutral style, not reused from FAIL/BLOCKED, so a
+    # cancelled case is never mistaken for a defect the tool found.
+    "CANCELLED": ('<span class="badge">CANCELLED</span>', "row-cancelled"),
 }
 
 # Fraction of the screenshot cap reserved for early-run context on a
@@ -133,6 +137,7 @@ def build_execution_report(data: dict) -> str:
     passed = sum(1 for r in results if r.get("verdict") == "PASS")
     failed = sum(1 for r in results if r.get("verdict") == "FAIL")
     blocked = sum(1 for r in results if r.get("verdict") == "BLOCKED")
+    cancelled = sum(1 for r in results if r.get("verdict") == "CANCELLED")
     # The report itself is served through a token-gated route; each
     # screenshot is a separate request under the same route, so the same
     # token needs to travel with each relative image URL.
@@ -210,6 +215,7 @@ body{{{BODY_FONT_CSS}background:var(--bg);color:var(--text);font-size:14px;line-
 .exec-case{{background:var(--cream-card);border:1px solid var(--border);border-left:4px solid var(--border);border-radius:10px;padding:18px 20px;margin-bottom:16px}}
 .exec-case.row-valid{{border-left-color:var(--green)}}
 .exec-case.row-flagged{{border-left-color:var(--red)}}
+.exec-case.row-cancelled{{border-left-color:var(--border)}}
 .exec-case-hdr{{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:12px}}
 .exec-notes{{color:var(--muted);margin-bottom:10px}}
 .evidence{{margin:6px 0 10px}}.ev-grid{{display:grid;grid-template-columns:1fr 1fr;gap:14px}}@media(max-width:700px){{.ev-grid{{grid-template-columns:1fr}}}}
@@ -242,6 +248,7 @@ body{{{BODY_FONT_CSS}background:var(--bg);color:var(--text);font-size:14px;line-
   <div class="card good"><div class="n">{passed}</div><div class="l">Passed</div></div>
   <div class="card bad"><div class="n">{failed}</div><div class="l">Failed</div></div>
   <div class="card warn"><div class="n">{blocked}</div><div class="l">Blocked</div></div>
+  {f'<div class="card"><div class="n">{cancelled}</div><div class="l">Cancelled</div></div>' if cancelled else ''}
 </div>
 {f'<div class="run-zip-row"><a class="btn-zip" href="{run_zip_url}">Download everything for this run (.zip)</a></div>' if run_zip_url else ''}
 {sections_html}

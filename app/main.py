@@ -64,13 +64,15 @@ from .report_builder import build_html, build_xlsx, build_html_custom, build_xls
 from . import req_history
 from . import test_case_history
 from .diagram_parser import parse_flow_diagrams
-from .execute_engine import execute_test_case, ExecutionError, EnvironmentUnreachableError
+from . import execute_engine
+from .execute_engine import execute_test_case, ExecutionError, EnvironmentUnreachableError, ExecutionCancelled
 from .execution_report import build_execution_report
 from .import_parser import try_parse_tabular
 from . import run_logger
 from . import admin_routes
 from . import fixtures
 from . import exec_status
+from . import job_registry
 from . import trial_signups
 from . import mailer
 from . import client_quotas
@@ -2267,6 +2269,9 @@ async def execute_run(
             for t in selected_ids
         ],
     })
+    # Run Control Center (2026-09-25): the one job registry cancel, queue-
+    # visibility, and the live ETA all read from - see app/job_registry.py.
+    job_registry.REGISTRY.register(exec_id, access_code, len(selected_ids))
     _active_executions_by_code[access_code] = {
         "total": len(selected_ids),
         "status_url": f"/execute-status/{run_id}/{exec_id}?token={exec_token}",
@@ -2305,9 +2310,11 @@ async def _run_execution_batch(*args, **kwargs):
     itself, so a crash after impl's own bookkeeping can never double-count
     the release."""
     exec_dir = kwargs.get("exec_dir")
+    exec_id = kwargs.get("exec_id")
     access_code = kwargs.get("access_code")
     selected_ids = kwargs.get("selected_ids") or []
     actual_count = 0
+    job_registry.REGISTRY.mark_running(exec_id)
     try:
         actual_count = await _run_execution_batch_impl(*args, **kwargs) or 0
     except Exception as e:
@@ -2317,10 +2324,17 @@ async def _run_execution_batch(*args, **kwargs):
                 "state": "error",
                 "error": GENERIC_ERROR_MESSAGE.format(ref=ref),
             })
+        job_registry.REGISTRY.mark_terminal(exec_id, "ERROR")
     finally:
         if access_code is not None:
             client_quotas.reconcile_execution(access_code, len(selected_ids), actual_count)
             _active_executions_by_code.pop(access_code, None)
+        # Job may already be DONE/ERROR/CANCELLED (set inside impl or the
+        # except branch above) - cleanup just drops the bookkeeping either
+        # way, matching _active_executions_by_code's own pop-in-finally
+        # pattern so this dict can never grow unboundedly across the life
+        # of the process.
+        job_registry.REGISTRY.cleanup(exec_id)
 
 
 async def _run_execution_batch_impl(
@@ -2365,14 +2379,48 @@ async def _run_execution_batch_impl(
                 })
             else:
                 cases.append({"tc_id": t, "title": all_test_cases[t].get("title", ""), "status": "NOT_STARTED"})
+        job_registry.REGISTRY.set_completed(exec_id, len(results_by_tc))
+        # Run Control Center (2026-09-25): live, telemetry-based ETA and
+        # honest queue-position messaging - Finding 4 from the four-audit-
+        # findings review. remaining_steps_estimate is deliberately crude
+        # (unfinished cases * MAX_AGENT_STEPS / 2, since most cases finish
+        # well under the hard cap) rather than a precise prediction - the
+        # point is replacing a hardcoded sentence with something that
+        # tracks real observed speed and updates itself, not a perfectly
+        # accurate forecast. eta_seconds returns None on a cold start
+        # (no step observed yet for this job) - the client-facing template/
+        # JS must show "estimating..." for that case, never "0s" or a
+        # divide-by-zero-derived number.
+        cases_left = max(0, total - len(results_by_tc))
+        remaining_steps_estimate = cases_left * (execute_engine.MAX_AGENT_STEPS // 2 or 1)
+        eta_s = job_registry.REGISTRY.eta_seconds(exec_id, remaining_steps_estimate)
+        queue = job_registry.REGISTRY.queue_position(exec_id)
         exec_status.write_status(exec_dir, {
             "state": "running",
             "total": total,
             "completed": len(results_by_tc),
             "cases": cases,
+            "eta_seconds": eta_s,
+            "queue": queue,
         })
 
     for tc_id in scheduled_ids:
+        # Between-test-case cancellation (Finding 1): a batch of several
+        # cases can be stopped before starting the next one even if the
+        # step-loop check inside the just-finished case never tripped (e.g.
+        # cancel arrived in the gap between cases). Every case from here on
+        # is reported CANCELLED rather than silently omitted, so the client
+        # sees exactly what did and didn't run.
+        if job_registry.REGISTRY.is_cancelled(exec_id):
+            for remaining_tc_id in scheduled_ids[scheduled_ids.index(tc_id):]:
+                if remaining_tc_id not in results_by_tc:
+                    results_by_tc[remaining_tc_id] = {
+                        "tc_id": remaining_tc_id, "title": all_test_cases[remaining_tc_id].get("title", ""),
+                        "verdict": "CANCELLED",
+                        "notes": "Stopped at your request before this test case started.",
+                        "step_log": [], "screenshots": [], "infra_fault": False,
+                    }
+            break
         tc = all_test_cases[tc_id]
         role = fixtures.parse_fixture_role(tc.get("fixture_role", ""))
         shots_dir = exec_dir / f"shots_{tc_id}".replace("/", "_")
@@ -2485,9 +2533,12 @@ async def _run_execution_batch_impl(
                 fixture_role=tc.get("fixture_role", ""),
                 shots_dir=shots_dir,
                 rl=rl,
-                on_step=lambda step, max_steps, _tc_id=tc_id: _push_status(
-                    current_tc_id=_tc_id, current_step=step, current_max_steps=max_steps,
+                on_step=lambda step, max_steps, _tc_id=tc_id: (
+                    job_registry.REGISTRY.record_step(exec_id),
+                    _push_status(current_tc_id=_tc_id, current_step=step, current_max_steps=max_steps),
                 ),
+                access_code=access_code or "",
+                cancel_event=job_registry.REGISTRY.get_event(exec_id),
             )
             notes = outcome["notes"] + fixture_note
             results_by_tc[tc_id] = {
@@ -2517,6 +2568,30 @@ async def _run_execution_batch_impl(
                     {"run_id": run_id, "exec_id": exec_id, "tc_id": tc_id},
                 )
                 run_fixtures[role[1]] = saved
+        except ExecutionCancelled:
+            # Finding 1 (2026-09-25): a run stopped at the client's own
+            # request is never reported as BLOCKED/FAIL - those verdicts
+            # mean something specific (a real test outcome), and a
+            # cancellation isn't one. Distinct CANCELLED status, and
+            # excluded from the execution allowance below exactly like an
+            # infra_fault - the client didn't get a fair completed attempt,
+            # they chose to stop it.
+            rl.finish("cancelled", {"note": "cancelled by client request"})
+            results_by_tc[tc_id] = {
+                "tc_id": tc_id, "title": tc.get("title", ""), "verdict": "CANCELLED",
+                "notes": "Stopped at your request.", "step_log": [], "screenshots": [],
+                "infra_fault": False,
+            }
+            for remaining_tc_id in scheduled_ids[scheduled_ids.index(tc_id) + 1:]:
+                if remaining_tc_id not in results_by_tc:
+                    results_by_tc[remaining_tc_id] = {
+                        "tc_id": remaining_tc_id, "title": all_test_cases[remaining_tc_id].get("title", ""),
+                        "verdict": "CANCELLED",
+                        "notes": "Stopped at your request before this test case started.",
+                        "step_log": [], "screenshots": [], "infra_fault": False,
+                    }
+            _push_status()
+            break
         except EnvironmentUnreachableError as e:
             # 2026-09-23 (see claude/[pending]-bedrock-rate-limit-and-error-
             # hardening-2026-09-23.md): split out from the base ExecutionError
@@ -2623,6 +2698,7 @@ async def _run_execution_batch_impl(
         "passed": sum(1 for r in results if r["verdict"] == "PASS"),
         "failed": sum(1 for r in results if r["verdict"] == "FAIL"),
         "blocked": sum(1 for r in results if r["verdict"] == "BLOCKED"),
+        "cancelled": sum(1 for r in results if r["verdict"] == "CANCELLED"),
     }
 
     # Final status - the status page's poller sees state == "done" and the
@@ -2641,14 +2717,17 @@ async def _run_execution_batch_impl(
             "download_token": exec_token, "hide_trial_cta": True, **summary_counts,
         },
     })
+    job_registry.REGISTRY.mark_terminal(exec_id, "CANCELLED" if job_registry.REGISTRY.is_cancelled(exec_id) else "DONE")
     # 2026-09-23: only count results that got a genuine attempt toward the
     # client's execution allowance - see the infra_fault reasoning on the
-    # ExecutionError/Exception branches above. This return value is what
-    # reconcile_execution's `actual_count` reconciles the earlier
-    # reserve_execution() reservation down to, so an infra-fault result
-    # (never a real, fair attempt) now correctly releases its slot back to
-    # the client instead of permanently consuming it.
-    return len([r for r in results if not r.get("infra_fault")])
+    # ExecutionError/Exception branches above. 2026-09-25: CANCELLED results
+    # are excluded the same way (Finding 1) - the client chose to stop
+    # before/during the attempt, so it was never a fair completed try either.
+    # This return value is what reconcile_execution's `actual_count`
+    # reconciles the earlier reserve_execution() reservation down to, so
+    # neither an infra-fault nor a cancelled result permanently consumes the
+    # client's allowance.
+    return len([r for r in results if not r.get("infra_fault") and r["verdict"] != "CANCELLED"])
 
 
 @app.get("/download-exec/{run_id}/{exec_id}/{subpath:path}")
@@ -2711,13 +2790,46 @@ async def execute_status_json(run_id: str, exec_id: str, token: str = ""):
     if status is None:
         raise HTTPException(status_code=404)
     # Never echo credentials or the report/result payload in the poll
-    # response - only what the progress UI needs.
+    # response - only what the progress UI needs. eta_seconds/queue
+    # (2026-09-25, Run Control Center) come from _push_status's writes;
+    # absent on the very first poll before the batch has written anything
+    # beyond the initial exec_status.write_status in execute_run, and
+    # naturally absent once state != "running".
     return {
         "state": status.get("state", "running"),
         "total": status.get("total", 0),
         "completed": status.get("completed", 0),
         "cases": status.get("cases", []),
+        "eta_seconds": status.get("eta_seconds"),
+        "queue": status.get("queue"),
+        "cancellable": status.get("state", "running") == "running",
     }
+
+
+@app.post("/execute-status/{run_id}/{exec_id}/cancel")
+async def execute_cancel(run_id: str, exec_id: str, token: str = ""):
+    """Finding 1 (2026-09-25): the client-facing stop-run action. Requires
+    the same signed download token the status page itself requires - see
+    _verify_download_token - so a guessed or shared exec_id alone can't stop
+    someone else's run. Always returns quickly: this only flips a
+    threading.Event (see app/job_registry.py); the actual stop happens the
+    next time the running batch checks it, which may be seconds away if a
+    model call is already in flight (an in-flight request is allowed to
+    finish rather than being yanked mid-air - it's already billed regardless
+    of what we do here, and aborting a live HTTP call safely is real added
+    complexity for at most one request's worth of savings)."""
+    if not run_id.isalnum() or not exec_id.isalnum():
+        raise HTTPException(status_code=400)
+    if not _verify_download_token(f"{run_id}/{exec_id}", token):
+        raise HTTPException(status_code=403)
+    found = job_registry.REGISTRY.cancel(exec_id)
+    if not found:
+        # Not an error the client caused - most likely the run already
+        # finished (and was cleaned up) between their click and this
+        # request landing. Cancelling something that's already done is a
+        # no-op by definition, so this is reported as success, not 404.
+        return {"ok": True, "already_finished": True}
+    return {"ok": True}
 
 
 def _zip_directory(root_dir: Path, base_name_in_zip: str = "") -> io.BytesIO:

@@ -5,18 +5,30 @@
   var token = root.getAttribute("data-token");
   var pageUrl = "/execute-status/" + runId + "/" + execId + "?token=" + encodeURIComponent(token);
   var jsonUrl = "/execute-status-json/" + runId + "/" + execId + "?token=" + encodeURIComponent(token);
+  var cancelUrl = "/execute-status/" + runId + "/" + execId + "/cancel?token=" + encodeURIComponent(token);
 
   var fill = document.getElementById("progress-fill");
   var label = document.getElementById("progress-label");
+  var etaRow = document.getElementById("eta-row");
+  var queueNote = document.getElementById("queue-note");
   var caseList = document.getElementById("case-list");
   var staleHint = document.getElementById("stale-hint");
   var staleSecs = document.getElementById("stale-secs");
   var refreshBtn = document.getElementById("refresh-now-btn");
   var refreshFlash = document.getElementById("refresh-flash");
+  var cancelBtn = document.getElementById("cancel-run-btn");
+  var cancelHint = document.getElementById("cancel-hint");
+  var cancelRequested = false;
 
   var pendingTimer = null;
   var lastRenderedAt = Date.now();
-  var STATUS_TEXT = {NOT_STARTED: "Not started", IN_PROGRESS: "In progress", PASS: "PASS", FAIL: "FAIL", BLOCKED: "BLOCKED"};
+  var STATUS_TEXT = {NOT_STARTED: "Not started", IN_PROGRESS: "In progress", PASS: "PASS", FAIL: "FAIL", BLOCKED: "BLOCKED", CANCELLED: "Cancelled"};
+
+  function formatEta(seconds) {
+    if (seconds === null || seconds === undefined) return "Estimating time remaining…";
+    var mins = Math.max(1, Math.round(seconds / 60));
+    return "About " + mins + " minute" + (mins === 1 ? "" : "s") + " remaining, based on this run's own pace so far.";
+  }
 
   function flashRefresh(msg) {
     refreshFlash.textContent = msg;
@@ -31,6 +43,25 @@
     var pct = total ? Math.round((completed / total) * 100) : 0;
     fill.style.width = pct + "%";
     label.textContent = completed + " of " + total + " test cases done";
+
+    if (s.state === "running" && completed < total) {
+      etaRow.textContent = formatEta(s.eta_seconds);
+      etaRow.hidden = false;
+    } else {
+      etaRow.hidden = true;
+    }
+
+    if (s.queue && s.queue.ahead_count > 0) {
+      queueNote.textContent = s.queue.ahead_count + " other run" + (s.queue.ahead_count === 1 ? "" : "s") +
+        " ahead of yours, sharing today's request capacity.";
+      queueNote.hidden = false;
+    } else {
+      queueNote.hidden = true;
+    }
+
+    if (cancelBtn) {
+      cancelBtn.hidden = !s.cancellable || cancelRequested;
+    }
 
     caseList.innerHTML = "";
     (s.cases || []).forEach(function(c){
@@ -125,6 +156,24 @@
     if (document.visibilityState === "visible") poll(false);
   });
   refreshBtn.addEventListener("click", function(){ poll(true); });
+
+  if (cancelBtn) {
+    cancelBtn.addEventListener("click", function(){
+      if (cancelRequested) return;
+      if (!window.confirm("Stop this run? Test cases already finished keep their result; anything else will show as Cancelled.")) return;
+      cancelRequested = true;
+      cancelBtn.hidden = true;
+      cancelHint.hidden = false;
+      fetch(cancelUrl, {method: "POST", cache: "no-store"}).then(function(){
+        poll(true);
+      }).catch(function(){
+        // Even if this particular request failed, the next regular poll
+        // will show current state - never leave the client stuck with no
+        // feedback at all.
+        poll(true);
+      });
+    });
+  }
 
   setInterval(function(){
     if (document.visibilityState === "visible") {

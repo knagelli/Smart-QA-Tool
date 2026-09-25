@@ -20,6 +20,7 @@
     <div class="card stat"><div class="n">{{ passed }}</div><div class="l">Passed</div></div>
     <div class="card stat"><div class="n">{{ failed }}</div><div class="l">Failed</div></div>
     <div class="card stat"><div class="n">{{ blocked }}</div><div class="l">Blocked</div></div>
+    {% if cancelled %}<div class="card stat"><div class="n">{{ cancelled }}</div><div class="l">Cancelled</div></div>{% endif %}
   </div>
 
   <div class="card downloads">

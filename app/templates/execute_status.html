@@ -32,6 +32,9 @@
 .status-pill.PASS{background:var(--gbg);color:var(--green)}
 .status-pill.FAIL{background:var(--rbg);color:var(--red)}
 .status-pill.BLOCKED{background:var(--abg);color:var(--amber)}
+.status-pill.CANCELLED{background:var(--border);color:var(--muted)}
+.eta-row{font-size:12.5px;color:var(--muted);margin-top:4px}
+.queue-note{font-size:12.5px;color:var(--muted);margin-top:2px}
 .step-progress-mini{width:44px;height:5px;border-radius:999px;background:var(--sky);overflow:hidden;flex-shrink:0}
 .step-progress-mini-fill{height:100%;background:var(--blue);border-radius:999px}
 .refresh-row{display:flex;align-items:center;gap:10px;margin-top:16px}
@@ -55,14 +58,18 @@
 
   <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
   <p class="progress-label" id="progress-label">{{ completed }} of {{ total }} test cases done</p>
+  <p class="eta-row" id="eta-row" hidden></p>
+  <p class="queue-note" id="queue-note" hidden></p>
 
   <ul class="case-list" id="case-list"></ul>
 
   <div class="refresh-row">
     <button type="button" class="btn secondary" id="refresh-now-btn">Refresh now</button>
+    <button type="button" class="btn secondary" id="cancel-run-btn">Stop this run</button>
     <span class="refresh-flash" id="refresh-flash">Up to date</span>
     <span id="stale-hint" class="hint" hidden>Nothing new for <span id="stale-secs"></span>s &mdash; your browser may have paused this tab, or the run is briefly slow to respond. It hasn't stopped; try Refresh now or reload the page.</span>
   </div>
+  <p class="hint" id="cancel-hint" hidden>Stopping&hellip; test cases already finished keep their real result; anything in progress or not yet started will show as Cancelled.</p>
 
   <p class="footnote">Closing this tab won't stop the run &mdash; it keeps going in the background. Re-open this same link any time to check on it.</p>
   {% include "_client_hub_footnote.html" %}
