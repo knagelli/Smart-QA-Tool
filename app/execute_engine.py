@@ -2130,6 +2130,18 @@ def execute_test_case(
 
     except ExecutionError:
         raise
+    except ExecutionCancelled:
+        # BUG FIX (2026-09-25, found via a real live-execution test): this
+        # catch-all was written before ExecutionCancelled existed, and
+        # ExecutionCancelled IS an Exception subclass, so without this
+        # explicit re-raise it was being silently caught by the bare
+        # `except Exception` below and wrapped into a generic ExecutionError
+        # - which is exactly why a real Stop-mid-test-case click showed up
+        # as a BLOCKED result with a generic error reference instead of the
+        # intended CANCELLED verdict. Re-raising here, the same way
+        # ExecutionError already does one line up, lets it reach main.py's
+        # dedicated `except ExecutionCancelled` handler untouched.
+        raise
     except Exception as e:
         raise ExecutionError(f"Browser automation failed: {type(e).__name__}") from e
 
