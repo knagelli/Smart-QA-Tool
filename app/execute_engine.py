@@ -45,6 +45,26 @@ from anthropic import RateLimitError, PermissionDeniedError
 from . import ai_client
 from .run_logger import hash_bytes
 
+# 2026-09-25 wait_for_text fuzzy-match fallback (see claude/wait-for-text-
+# fuzzy-fallback-2026-09-25.md for the full design/review history). rapidfuzz
+# is optional: its absence must be LOUD (a startup log line every time, so a
+# missing dependency on a fresh deploy is immediately visible in journalctl)
+# but never FATAL (missing it just means the fuzzy fallback is unavailable
+# and wait_for_text behaves exactly as it always has - degrading a cost/
+# robustness nicety must never take down live test execution).
+try:
+    from rapidfuzz import fuzz as _rapidfuzz_fuzz
+    _RAPIDFUZZ_AVAILABLE = True
+except ImportError:
+    _rapidfuzz_fuzz = None
+    _RAPIDFUZZ_AVAILABLE = False
+    logging.getLogger("req2qa.execute").warning(
+        "rapidfuzz is not installed - wait_for_text's fuzzy-paraphrase "
+        "fallback is DISABLED for this process. Exact/regex text matching "
+        "still works normally. Install rapidfuzz (see requirements.txt) to "
+        "enable it."
+    )
+
 logger = logging.getLogger("req2qa.execute")
 
 MODEL = os.environ.get("QA_MODEL", "claude-sonnet-4-6")
@@ -165,6 +185,104 @@ HISTORY_CACHE_ENABLED = _env_flag("REQ2QA_HISTORY_CACHE", True)
 # Rough size of the fixed tools list in tokens, added to pacing estimates.
 TOOLS_TOKEN_ESTIMATE = 2500
 CLAUSE_EVIDENCE_MAX_REJECTIONS = 2
+
+# 2026-09-25 wait_for_text fuzzy-paraphrase fallback - see claude/wait-for-
+# text-fuzzy-fallback-2026-09-25.md. Zero LLM-token cost (all matching runs
+# locally in Python; the model only ever sees {"found": true/false}), used
+# ONLY after the exact/regex pass already failed. A prior design used a
+# negation-word list ("not", "fail", "error"...) as the safety gate; a final
+# adversarial review found real, concrete exploits ("A record with this
+# value already exists" contains none of those words but is a semantic
+# rejection of "a new record will be created") - a lexical negation list
+# cannot catch semantic negation, so it is NOT used as the primary defense
+# here. Instead: a strict similarity bar plus requiring the shared words to
+# be the DISTINCTIVE (non-stopword) words of the candidate phrase, not just
+# any two words in common - and every fuzzy accept is logged to the audit
+# trail (never sent to the model) so a human can review any fuzzy-triggered
+# verdict. REQ2QA_WAIT_FUZZY=0 disables this fallback entirely.
+WAIT_FOR_TEXT_FUZZY_ENABLED = _env_flag("REQ2QA_WAIT_FUZZY", True) and _RAPIDFUZZ_AVAILABLE
+WAIT_FOR_TEXT_FUZZY_RATIO_THRESHOLD = 0.97
+WAIT_FOR_TEXT_FUZZY_MIN_SHARED_TOKENS = 2
+_WAIT_FOR_TEXT_STOPWORDS = frozenset((
+    "a", "an", "the", "is", "was", "will", "be", "been", "being", "to", "of",
+    "in", "on", "at", "for", "with", "and", "or", "this", "that", "it", "its",
+    "your", "you", "has", "have", "had", "as", "by", "from", "are", "were",
+))
+
+
+def _wait_for_text_distinctive_tokens(text: str) -> set:
+    """Lowercased, punctuation-stripped, stopword-filtered word set used to
+    require that a fuzzy match shares the MEANINGFUL words of the candidate
+    phrase, not just any two words in common (e.g. two shared filler words
+    is not evidence of the same claim). Deliberately keeps short words like
+    "no"/"not" IN the distinctive set (they are not in the stopword list) -
+    those carry real meaning here, unlike "the"/"a"/"is"."""
+    return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if w not in _WAIT_FOR_TEXT_STOPWORDS and len(w) > 1}
+
+
+def _wait_for_text_fuzzy_match(candidates: list, frames_to_check: list) -> Optional[dict]:
+    """The local, zero-token fuzzy fallback for wait_for_text. Returns a dict
+    with the accepted match's details (for logging - NEVER sent to the
+    model) or None if nothing cleared the bar. Only called after the
+    exact/regex pass has already failed for every candidate.
+
+    Deliberately does its own single, immediate text read per frame (no
+    waiting/polling) - the exact-match pass above already spent the given
+    timeout budget waiting for the text to appear; if it's going to be there
+    at all, it's there now. This also means there is no separate timeout
+    budget to divide or starve, unlike the exact-match pass."""
+    if not WAIT_FOR_TEXT_FUZZY_ENABLED or not candidates:
+        return None
+    # Prefer live-region/toast/alert containers, which keep one visual
+    # message as one string (see the module note on why splitting whole-page
+    # text by line fragments a message that spans multiple child elements).
+    # Fall back to whole-frame text (split into lines) only if a frame has
+    # none of these - most ServiceNow/enterprise-app confirmation and error
+    # hints render inside one of these roles.
+    container_selector = "[role='alert'], [role='status'], [aria-live], .alert, .toast, .banner"
+    best = None  # (ratio, candidate, matched_text, frame_index)
+    for fi, frame in enumerate(frames_to_check):
+        lines = []
+        try:
+            containers = frame.locator(container_selector)
+            count = min(containers.count(), 20)
+            for i in range(count):
+                try:
+                    txt = containers.nth(i).inner_text(timeout=500)
+                    if txt and txt.strip():
+                        lines.append(txt.strip())
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        if not lines:
+            try:
+                body_text = frame.locator("body").inner_text(timeout=500)
+                lines = [ln.strip() for ln in body_text.splitlines() if ln.strip()]
+            except Exception:
+                continue
+        for line in lines:
+            line_tokens = _wait_for_text_distinctive_tokens(line)
+            for cand in candidates:
+                cand_tokens = _wait_for_text_distinctive_tokens(cand)
+                shared = cand_tokens & line_tokens
+                if len(shared) < WAIT_FOR_TEXT_FUZZY_MIN_SHARED_TOKENS:
+                    continue
+                # The shared words must be the candidate's OWN distinctive
+                # words, not just any two words the two texts happen to
+                # share - i.e. most of what the candidate is actually
+                # claiming must be present in what was seen, not a
+                # coincidental partial overlap.
+                if cand_tokens and len(shared) / len(cand_tokens) < 0.6:
+                    continue
+                ratio = _rapidfuzz_fuzz.token_set_ratio(cand, line) / 100.0
+                if ratio >= WAIT_FOR_TEXT_FUZZY_RATIO_THRESHOLD:
+                    if best is None or ratio > best[0]:
+                        best = (ratio, cand, line, fi)
+    if best is None:
+        return None
+    ratio, cand, line, fi = best
+    return {"ratio": round(ratio, 3), "candidate": cand, "matched_text": line[:200], "frame_index": fi}
 CLAUSE_EVIDENCE_EXTRA_STEPS = 3
 # Wording that signals an assumption rather than an observation. Heuristic
 # on purpose: a false hit only costs the agent one rewrite of the evidence.
@@ -1343,10 +1461,19 @@ TOOLS = [
     },
     {
         "name": "wait_for_text",
-        "description": "Wait (up to a few seconds) for the given text to appear anywhere on the page. Use this after an action that should produce a confirmation message.",
+        "description": "Wait (up to a few seconds) for the given text to appear anywhere on the page. Use this after an action that should produce a confirmation message. You may pass a single phrase, or a list of a few alternative phrasings of the SAME underlying condition if you are not sure of the exact wording the app will use - do this instead of calling wait_for_text repeatedly with one guess at a time.",
         "input_schema": {
             "type": "object",
-            "properties": {"text": {"type": "string"}, "timeout_ms": {"type": "integer"}},
+            "properties": {
+                "text": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "array", "items": {"type": "string"}, "maxItems": 5},
+                    ],
+                    "description": "The text to look for, or a list of up to 5 alternative phrasings of the same condition.",
+                },
+                "timeout_ms": {"type": "integer"},
+            },
             "required": ["text"],
         },
     },
@@ -1473,6 +1600,7 @@ Rules:
 - After submitting a form, always take a fresh snapshot and check for an inline validation message (e.g. "should not exceed N characters", "already exists", "required") before deciding what to do next. If you see one, adapt the value you enter to satisfy it (e.g. shorten it, change it) - do not resubmit the exact same value again. If the same action fails validation twice in a row even after you've adapted the value, stop retrying it - call finish_test with FAIL or BLOCKED and quote the validation message in your notes, rather than repeating it for the rest of your available actions.
 - A toggle/switch control (e.g. "Create Login Details?", "Enabled") is often a checkbox styled to look like a switch. If you don't see an element that looks directly clickable for it, look for a label with that same wording in the snapshot and click that instead - clicking a field's label toggles it exactly like clicking the control itself. If you still can't find any way to change it after one such attempt, don't keep retrying the same snapshot - call finish_test with BLOCKED and say which control you couldn't operate.
 - If a step calls for attaching/uploading a file (e.g. "attach a supporting document", "upload a certificate"), use the upload_file tool on the ref of the attach/choose-file/upload control - do not try to click through to a native OS file dialog, and do not call finish_test with BLOCKED for a file-upload step; upload_file handles it.
+- wait_for_text checks for a SUBSTRING match, not an exact phrase, and it also recognizes some close paraphrases automatically - if it finds text that is a close paraphrase of what the expected result describes (e.g. a typeahead hint like "No exact match" satisfying "a hint that a new record will be created automatically"), that clause is MET. If you are unsure of the exact wording the app will use, pass a LIST of a few alternative phrasings in ONE wait_for_text call (the text parameter accepts a list) instead of calling it repeatedly with one guess at a time. Do not treat a "not found" result for one exact phrasing as ruling out a clause that a different wording already confirmed. If you have already called wait_for_text twice for the same underlying condition, stop probing - decide the clause from what you've already observed and call finish_test.
 {fixture_instruction}{nav_instruction}"""
 
 
@@ -1864,7 +1992,21 @@ def execute_test_case(
                 done = False
                 for tu in tool_uses:
                     name, inp = tu.name, tu.input
-                    if name in _PAGE_CHANGING_TOOLS or name in ("wait_for_text", "fill_login"):
+                    # 2026-09-25 TC-007 BLOCKED fix: wait_for_text is a READ, not an
+                    # attempt - it can never change the page, so it must not count
+                    # as "an action was tried since the last look" for stall
+                    # purposes. Before this fix, a burst of wait_for_text probes
+                    # (the model hunting for an exact phrasing match - now also
+                    # addressed in the system prompt above) silently spent
+                    # attempts_since_snapshot budget; the NEXT explicit get_snapshot
+                    # then saw an unchanged fingerprint with attempts_since_snapshot
+                    # > 0 and charged it as a real stall, on top of whatever stall
+                    # budget earlier genuine mis-clicks had already used - which is
+                    # exactly how a real 2026-09-25 run went BLOCKED instead of FAIL
+                    # after 9 wait_for_text probes followed by one confirmatory
+                    # get_snapshot. See claude/tc007-blocked-regression-fix-
+                    # 2026-09-25.md for the full trace.
+                    if name in _PAGE_CHANGING_TOOLS or name == "fill_login":
                         attempts_since_snapshot += 1
                     try:
                         if name == "get_snapshot":
@@ -1974,23 +2116,75 @@ def execute_test_case(
                             # stays close to the original budget regardless of
                             # frame count - for the common single-frame case
                             # (len(frames) == 1) this is identical to before.
+                            #
+                            # 2026-09-25: accepts either one string or a list of
+                            # up to a few candidate phrasings (see the tool
+                            # schema above) - each is tried in turn, in every
+                            # frame, before falling through to the fuzzy
+                            # fallback below. This is what a real production
+                            # incident (TC-007, see claude/tc007-blocked-
+                            # regression-fix-2026-09-25.md) needed: the model
+                            # was hunting for an exact phrase one guess at a
+                            # time instead of listing its alternatives in one
+                            # call.
+                            raw_text = inp["text"]
+                            candidates = raw_text if isinstance(raw_text, list) else [raw_text]
+                            candidates = [c for c in candidates if isinstance(c, str) and c][:5] or [""]
                             timeout = inp.get("timeout_ms", 5000)
                             frames_to_check = _visible_frames(page)
                             per_frame_timeout = max(500, timeout // max(1, len(frames_to_check)))
                             found = False
+                            matched_candidate = None
                             for frame in frames_to_check:
-                                try:
-                                    frame.get_by_text(inp["text"], exact=False).first.wait_for(timeout=per_frame_timeout)
-                                    found = True
+                                for cand in candidates:
+                                    try:
+                                        frame.get_by_text(cand, exact=False).first.wait_for(timeout=per_frame_timeout)
+                                        found = True
+                                        matched_candidate = cand
+                                        break
+                                    except PlaywrightTimeoutError:
+                                        continue
+                                    except Exception:
+                                        continue
+                                if found:
                                     break
-                                except PlaywrightTimeoutError:
-                                    continue
-                                except Exception:
-                                    continue
                             result_payload = {"found": found}
+                            fuzzy_match = None
+                            if not found:
+                                # Zero-LLM-token fallback: recognizes a
+                                # paraphrase of what was asked for (e.g.
+                                # ServiceNow's real "No exact match" satisfying
+                                # a check worded as "will be created
+                                # automatically") without ever sending the
+                                # model more page text - see
+                                # _wait_for_text_fuzzy_match's docstring and
+                                # claude/wait-for-text-fuzzy-fallback-2026-09-
+                                # 25.md for the full safety design (strict
+                                # similarity bar + distinctive-word overlap,
+                                # NOT a negation-word list, which a review
+                                # found has real, concrete exploits for
+                                # enterprise-app rejection messages).
+                                try:
+                                    fuzzy_match = _wait_for_text_fuzzy_match(candidates, frames_to_check)
+                                except Exception:
+                                    # A bug in the fuzzy layer must never take
+                                    # down test execution - fail open to the
+                                    # exact-match result computed above.
+                                    logger.exception("wait_for_text fuzzy fallback failed - continuing with exact-match result only")
+                                    fuzzy_match = None
+                                if fuzzy_match is not None:
+                                    found = True
+                                    result_payload = {"found": True, "match_type": "fuzzy", "confidence": fuzzy_match["ratio"]}
                             step_log.append(f"Waited for confirmation text")
                             if rl is not None:
-                                rl.event("step", {"step": step_num, "action": "wait_for_text", "target": inp.get("text", "")[:80], "result": result_payload})
+                                log_payload = {"step": step_num, "action": "wait_for_text", "target": [c[:80] for c in candidates], "result": result_payload}
+                                if fuzzy_match is not None:
+                                    # Audit trail only - never sent to the model/LLM,
+                                    # so this costs zero extra tokens, but lets a
+                                    # human reviewing a fuzzy-triggered verdict later
+                                    # see exactly what text actually triggered it.
+                                    log_payload["fuzzy_match_detail"] = fuzzy_match
+                                rl.event("step", log_payload)
                         elif name == "upload_file":
                             loc = _element_locator(page, inp["ref"])
                             if attachment_path[0] is None:
