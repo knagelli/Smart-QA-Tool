@@ -139,6 +139,83 @@ app = FastAPI(
     openapi_url=None,
 )
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+
+def _count_actual_execution_results(access_code: str, exec_id: str) -> int:
+    """Reconstructs how many test cases in a given execution actually
+    reached a billable, terminal result, purely from the per-test-case run
+    logs on disk (see run_logger.RunLog.start's "execute_{run_id}_{exec_id}_
+    {tc_id}" naming at the /execute-batch call site below) - used by
+    client_quotas.reconcile_orphaned_reservations at start-up (2026-09-25)
+    to true up a reservation left behind by a process that crashed mid-batch
+    and never reached its own finally block. Deliberately reads from disk
+    rather than any in-memory state, since job_registry (in-memory only) and
+    _active_executions_by_code are both empty again by the time a fresh
+    process starts up - the run logs are the only durable record of what
+    actually happened. access_code is accepted for a matching signature
+    with client_quotas' call but isn't needed for the lookup itself, since
+    exec_id (a 12-hex-char uuid4 slice) is already unique enough to glob on.
+
+    Uses the exact same billable-result rule as the live batch's own
+    actual_count return value (see _run_execution_batch_impl's final
+    return): a finish record counts unless its status is "cancelled" or its
+    summary carries infra_fault=True."""
+    count = 0
+    for path in run_logger.LOG_ROOT.glob(f"execute_*_{exec_id}_*.jsonl"):
+        try:
+            status = None
+            infra_fault = False
+            with path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except Exception:
+                        continue
+                    if rec.get("kind") == "finish":
+                        status = rec.get("status")
+                        infra_fault = bool((rec.get("summary") or {}).get("infra_fault"))
+            if status is not None and status != "cancelled" and not infra_fault:
+                count += 1
+        except Exception:
+            # A single unreadable/corrupt log must never block reconciling
+            # the rest of this exec_id's other test cases, or any other
+            # exec_id in the same start-up sweep.
+            continue
+    return count
+
+
+def _reconcile_orphaned_execution_reservations() -> None:
+    """Called once, early, at process start-up (see the startup event below)
+    - see client_quotas.reconcile_orphaned_reservations for the full
+    reasoning. Best-effort and silent on individual failures by design (that
+    function already isolates per-entry errors); logs a summary line so a
+    real, non-empty recovery is visible in the server log without needing to
+    inspect the reservations file by hand."""
+    try:
+        resolved = client_quotas.reconcile_orphaned_reservations(_count_actual_execution_results)
+        if resolved:
+            logger.warning(
+                "Startup reconciliation released %d abandoned execution reservation(s) "
+                "from a previous process's crash/restart: %s",
+                len(resolved), resolved,
+            )
+        else:
+            # Deliberately logged even in the (normal, expected) empty case,
+            # at least for now: this is the only visible proof that the
+            # startup hook actually ran at all (as opposed to silently
+            # failing to register, or erroring before reaching this line)
+            # without deliberately crashing a process mid-batch to test it.
+            logger.info("Startup reservation reconciliation check complete - no abandoned reservations found.")
+    except Exception as e:
+        _log_and_ref(e, "reconcile_orphaned_reservations failed at startup (non-fatal)")
+
+
+@app.on_event("startup")
+def _on_startup_reconcile_reservations():
+    _reconcile_orphaned_execution_reservations()
 # Lets any template render a test scenario's steps as {{ tc.steps | humanize_steps }}
 # instead of the raw {{UNIQUE}}/{{FIXTURE:...}} tokens meaningful only to
 # execute_engine.py - see report_builder.humanize_steps for the one shared
@@ -1092,9 +1169,13 @@ async def analyze(
                 status_code=409,
             )
     else:
-        # Paid-client quota check (see client_quotas.py) - a client with no
-        # quota configured is unrestricted. Checked BEFORE calling the
-        # Anthropic API so a blocked attempt never spends a token.
+        # Cheap, read-only preview here (no reservation yet - see below for
+        # why): lets an already-exhausted client be told so immediately,
+        # before spending any time on the process-context/diagram parsing
+        # below, without yet touching attempt_count. The real check-and-
+        # reserve happens right before the Bedrock call (see comment there)
+        # so nothing reserved here would need to be unwound by one of the
+        # early-return validation checks in between.
         allowed, block_reason = client_quotas.check_can_generate(access_code)
         if not allowed:
             return templates.TemplateResponse(request, "start.html", {"error": block_reason}, status_code=429
@@ -1138,22 +1219,47 @@ async def analyze(
                 process_context = {"frame": frame, "raw_text": description_text}
                 process_source_label = "description"
 
-    run_id = uuid.uuid4().hex[:12]
-    rl = run_logger.RunLog.start("generate_a", run_id, {
-        "application": application,
-        "filename": requirements_file.filename,
-        "file_size": len(raw_bytes),
-        "qa_model": os.environ.get("QA_MODEL"),
-        "process_context": process_source_label or None,
-    })
+    if trial is None:
+        # The real, atomic check-and-reserve (2026-09-25 - was check-then-
+        # record-after, which raced two concurrent /analyze calls under the
+        # same shared access code past the attempt/kept ceiling for free;
+        # see reserve_generation_attempt's docstring). Deliberately placed
+        # here, immediately before run_id/RunLog/the Bedrock call and after
+        # every validation check above that can still return early on its
+        # own - mirroring reserve_execution's own placement rule, so nothing
+        # reserved here needs to be unwound by an earlier check failing.
+        # Everything from here through the run_qa_analysis call below is
+        # inside the try/except that releases this reservation on failure.
+        allowed, block_reason = client_quotas.reserve_generation_attempt(access_code)
+        if not allowed:
+            return templates.TemplateResponse(request, "start.html", {"error": block_reason}, status_code=429
+            )
+
+    rl = None
     try:
+        run_id = uuid.uuid4().hex[:12]
+        rl = run_logger.RunLog.start("generate_a", run_id, {
+            "application": application,
+            "filename": requirements_file.filename,
+            "file_size": len(raw_bytes),
+            "qa_model": os.environ.get("QA_MODEL"),
+            "process_context": process_source_label or None,
+        })
         max_tcs = trial_signups.TRIAL_MAX_TEST_CASES if trial is not None else None
         data = await asyncio.to_thread(run_qa_analysis, application, req_text, api_key, max_test_cases=max_tcs, process_context=process_context)
     except Exception as e:
         ref = _log_and_ref(e, "run_qa_analysis failed in /analyze")
-        rl.finish("fail", {"correlation_ref": ref, "error": str(e)})
+        if rl is not None:
+            rl.finish("fail", {"correlation_ref": ref, "error": str(e)})
         if trial is not None:
             trial_signups.release_trial(access_code)
+        else:
+            # Undo the reservation made above - this attempt never actually
+            # happened (whether run_qa_analysis itself failed, or something
+            # as early as RunLog.start did), so it must not count against
+            # the 5-attempt/kept ceiling. See reserve_generation_attempt/
+            # release_generation_attempt.
+            client_quotas.release_generation_attempt(access_code)
         return templates.TemplateResponse(request, "start.html", {"error": GENERIC_ERROR_MESSAGE.format(ref=ref)}, status_code=502
         )
 
@@ -1236,8 +1342,10 @@ async def analyze(
         # claude/billing-model-unbundled-generation-execution-2026-09-15.md)
         # before anything is billed or finalized - nothing is written to
         # report.html/data.xlsx/run_log.csv yet, only a working data.json so
-        # /confirm-generated/{run_id} can pick this run back up.
-        client_quotas.record_generation_attempt(access_code)
+        # /confirm-generated/{run_id} can pick this run back up. The attempt
+        # itself was already reserved (and counted) up front, before the
+        # Bedrock call - see reserve_generation_attempt above; recording it
+        # again here would double-count every successful generation.
         run_dir = RUNS_DIR / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
         data["status"] = "awaiting_curation"
@@ -2249,7 +2357,7 @@ async def execute_run(
     # reconcile_execution (called from the batch's completion/crash paths
     # below) is what trues this reservation up afterward. A no-op for
     # access codes with no quota configured (unrestricted legacy clients).
-    exec_allowed, exec_block_reason = client_quotas.reserve_execution(access_code, len(selected_ids))
+    exec_allowed, exec_block_reason = client_quotas.reserve_execution(access_code, len(selected_ids), exec_id=exec_id)
     if not exec_allowed:
         return err(exec_block_reason, test_cases=data.get("test_scenarios"), application=application)
 
@@ -2327,7 +2435,7 @@ async def _run_execution_batch(*args, **kwargs):
         job_registry.REGISTRY.mark_terminal(exec_id, "ERROR")
     finally:
         if access_code is not None:
-            client_quotas.reconcile_execution(access_code, len(selected_ids), actual_count)
+            client_quotas.reconcile_execution(access_code, len(selected_ids), actual_count, exec_id=exec_id)
             _active_executions_by_code.pop(access_code, None)
         # Job may already be DONE/ERROR/CANCELLED (set inside impl or the
         # except branch above) - cleanup just drops the bookkeeping either

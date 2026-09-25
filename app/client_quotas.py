@@ -229,14 +229,79 @@ def check_can_generate(access_code: str) -> tuple[bool, str | None]:
 
 
 def record_generation_attempt(access_code: str) -> None:
-    """Called once per successful generation call (not per HTTP request) for
-    a paid, quota-configured client. A no-op if no quota is configured."""
+    """Superseded 2026-09-25 by reserve_generation_attempt (before the
+    Bedrock call) + release_generation_attempt (on failure) - see those for
+    why. Kept only in case something outside main.py's /analyze flow still
+    calls this; do not wire this back into that flow, since debiting only
+    after the call reopens the exact concurrent-generation race those two
+    functions were added to close."""
     with _lock:
         data = _load()
         if access_code not in data:
             return
         data[access_code]["attempt_count"] = data[access_code].get("attempt_count", 0) + 1
         data[access_code]["updated_at"] = _now_iso()
+        _save(data)
+
+
+def reserve_generation_attempt(access_code: str) -> tuple[bool, str | None]:
+    """Atomically checks AND reserves a generation attempt in one step,
+    inside the same lock the rest of this module uses - added 2026-09-25 to
+    close a check-then-act race in the previous check_can_generate()-then-
+    record_generation_attempt() flow: that flow only debited attempt_count
+    once the (multi-second) Bedrock call finished, so two /analyze
+    submissions racing each other under the same access code (any number of
+    tabs/browsers/employees sharing that code, same as execution - quota is
+    per engagement, not per person) could both see "under the limit" before
+    either one recorded its attempt, together exceeding the disclosed
+    MAX_GENERATION_ATTEMPTS/kept-ceiling for free. Mirrors reserve_execution/
+    reconcile_execution below exactly.
+
+    Call this exactly once, right where check_can_generate used to gate the
+    request - i.e. BEFORE the Bedrock call, not after. If the call then
+    fails (exception, or any other reason the attempt should not count),
+    call release_generation_attempt to undo the reservation - do not call
+    record_generation_attempt afterwards, which would double-count.
+
+    Returns (allowed, block_reason), same shape and same messages as
+    check_can_generate (which remains available as a read-only preview).
+    Same fail-open default as the rest of this module: unconfigured/legacy
+    access codes are unrestricted and nothing is reserved for them."""
+    with _lock:
+        data = _load()
+        if access_code not in data:
+            return True, None
+        record = data[access_code]
+        if record.get("attempt_count", 0) >= MAX_GENERATION_ATTEMPTS:
+            return False, (
+                f"This engagement has reached its limit of {MAX_GENERATION_ATTEMPTS} generation "
+                "attempts. Please contact kalyan@req2qa.com to continue."
+            )
+        ceiling = record.get("subscribed_count", 0) * KEPT_CEILING_MULTIPLIER
+        if record.get("consumed_count", 0) >= ceiling:
+            return False, (
+                f"This engagement has already used {record.get('consumed_count', 0)} of its "
+                f"{ceiling:g}-test-case allowance. Please contact kalyan@req2qa.com to continue."
+            )
+        record["attempt_count"] = record.get("attempt_count", 0) + 1
+        record["updated_at"] = _now_iso()
+        _save(data)
+        return True, None
+
+
+def release_generation_attempt(access_code: str) -> None:
+    """Undoes a reservation made by reserve_generation_attempt when the
+    reserved generation call did not actually happen (e.g. run_qa_analysis
+    raised). Never decrements below 0. A no-op if no quota is configured -
+    same fail-open default as the rest of this module. Mirrors the trial
+    code's existing reserve_trial/release_trial pattern in trial_signups.py."""
+    with _lock:
+        data = _load()
+        if access_code not in data:
+            return
+        record = data[access_code]
+        record["attempt_count"] = max(0, record.get("attempt_count", 0) - 1)
+        record["updated_at"] = _now_iso()
         _save(data)
 
 
@@ -322,7 +387,36 @@ def check_can_execute(access_code: str, requested_count: int) -> tuple[bool, str
     return True, None
 
 
-def reserve_execution(access_code: str, requested_count: int) -> tuple[bool, str | None]:
+RESERVATIONS_STORE_PATH = DATA_ROOT / "execution_reservations.json"
+# Safety margin (2026-09-25): a reservation older than this, still pending at
+# process startup, is treated as abandoned by a crashed/restarted process -
+# see reconcile_orphaned_reservations below. Comfortably longer than any
+# plausible legitimate batch (MAX_AGENT_STEPS + PASS_REVIEW_EXTRA_STEPS steps
+# at the current ~9s/step pacing is well under 15 minutes even for one test
+# case; a real multi-case batch that's still genuinely running would also
+# still be an active in-memory job in the SAME process, which this check
+# never runs against - it only runs once, at startup, before any new batch
+# could have been submitted).
+RESERVATION_STALE_MINUTES = 15
+
+
+def _load_reservations() -> dict:
+    if not RESERVATIONS_STORE_PATH.exists():
+        return {}
+    try:
+        return json.loads(RESERVATIONS_STORE_PATH.read_text())
+    except Exception:
+        return {}
+
+
+def _save_reservations(data: dict) -> None:
+    RESERVATIONS_STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = RESERVATIONS_STORE_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2))
+    tmp.replace(RESERVATIONS_STORE_PATH)
+
+
+def reserve_execution(access_code: str, requested_count: int, exec_id: str = "") -> tuple[bool, str | None]:
     """Atomically checks AND reserves execution allowance in one step, inside
     the same lock the rest of this module uses - added 2026-09-17 to close a
     check-then-act race in the previous check_can_execute()-then-
@@ -340,11 +434,26 @@ def reserve_execution(access_code: str, requested_count: int) -> tuple[bool, str
     record_executed, which this replaces for the completion side (see
     reconcile_execution below).
 
+    `exec_id` (added 2026-09-25, see reconcile_orphaned_reservations below):
+    when given, this reservation is also written to a small separate ledger
+    (execution_reservations.json) keyed by exec_id, with the amount reserved
+    and a timestamp. This is what makes the reservation crash-safe: if the
+    process is killed mid-batch (deploy, OOM, crash) before
+    reconcile_execution's normal completion-time call ever runs, the
+    reservation would otherwise sit debited forever with nothing to release
+    it - the client permanently charged for test cases that were never run.
+    The ledger entry lets a future process start-up find it and true it up
+    from what actually ran, recorded independently in the per-test-case
+    run logs (see reconcile_orphaned_reservations). Passing "" (the
+    default) skips the ledger write and behaves exactly as before this
+    change - every current call site should pass the real exec_id.
+
     Returns (allowed, block_reason), same shape as check_can_execute (which
     remains as a read-only preview, e.g. for the admin view, but should no
     longer gate an actual execution request). Same fail-open default as the
     rest of this module: unconfigured/legacy access codes are unrestricted
-    and nothing is reserved for them."""
+    and nothing is reserved for them - and nothing is added to the ledger
+    for them either, since there is nothing to reconcile."""
     with _lock:
         data = _load()
         if access_code not in data:
@@ -367,20 +476,47 @@ def reserve_execution(access_code: str, requested_count: int) -> tuple[bool, str
         record["consumed_execution_count"] = consumed + requested_count
         record["updated_at"] = _now_iso()
         _save(data)
+        if exec_id:
+            reservations = _load_reservations()
+            reservations[exec_id] = {
+                "access_code": access_code,
+                "requested_count": requested_count,
+                "reserved_at": _now_iso(),
+            }
+            _save_reservations(reservations)
         return True, None
 
 
-def reconcile_execution(access_code: str, reserved_count: int, actual_count: int) -> None:
+def reconcile_execution(access_code: str, reserved_count: int, actual_count: int, exec_id: str = "") -> None:
     """Trues up a reservation made by reserve_execution once a batch is done
     (success or crash) against how many test cases it actually attempted.
     Only ever releases allowance BACK (adjusts down) - never adjusts up -
     so a batch that errored out or crashed before attempting every reserved
     case doesn't leave the client permanently charged for cases that were
-    reserved but never run. A no-op if actual_count >= reserved_count
-    (nothing to release) or if this access code has no quota configured."""
-    if actual_count >= reserved_count:
-        return
+    reserved but never run. A no-op on the quota itself if actual_count >=
+    reserved_count (nothing to release) or if this access code has no quota
+    configured - but the ledger entry (if exec_id is given) is still removed
+    in either case, since this call means the batch reached its own
+    finally-block completion normally and there is nothing left to
+    reconcile at startup for it.
+
+    The ledger read-modify-write and the quota read-modify-write both run
+    inside the SAME `with _lock:` critical section (2026-09-25 fix - the
+    ledger delete used to run unlocked, before this function's own lock
+    block, which could race a concurrent reserve_execution() call: if that
+    call's lock-protected add to the ledger landed in between this
+    function's unlocked read and its unlocked write-back, this function's
+    write would silently overwrite the ledger with a stale copy missing the
+    other call's brand-new entry - permanently losing crash-safety for that
+    other, unrelated reservation). One lock, one file, one critical section."""
     with _lock:
+        if exec_id:
+            reservations = _load_reservations()
+            if exec_id in reservations:
+                del reservations[exec_id]
+                _save_reservations(reservations)
+        if actual_count >= reserved_count:
+            return
         data = _load()
         if access_code not in data:
             return
@@ -391,6 +527,93 @@ def reconcile_execution(access_code: str, reserved_count: int, actual_count: int
         record["consumed_execution_count"] = max(0, record.get("consumed_execution_count", 0) - released)
         record["updated_at"] = _now_iso()
         _save(data)
+
+
+def reconcile_orphaned_reservations(count_actual_fn) -> list[dict]:
+    """Startup-time recovery for the crash gap reserve_execution's ledger
+    exists to close (see its docstring): every reservation still sitting in
+    execution_reservations.json when this runs was, by definition, made by a
+    process that no longer exists - a batch's own finally block (which calls
+    reconcile_execution and removes its ledger entry) only ever runs inside
+    the same process that reserved it, and this function is meant to be
+    called once, early, during a fresh process start-up, before any new
+    execution can have been submitted yet. So there is no "is it still
+    running" ambiguity to resolve here the way there might be with multiple
+    concurrent workers - Render's current single-worker deployment (see
+    module docstring) is what makes that reasoning hold.
+
+    `count_actual_fn(access_code, exec_id) -> int` is supplied by the
+    caller (main.py, which knows how to find and count the per-test-case
+    run logs for a given exec_id - see run_logger.py) rather than imported
+    here, to keep this module free of a dependency on log-file layout and
+    testable with a fake counter. It should return however many test cases
+    from that reservation actually reached a terminal, billable status
+    (PASS/FAIL/BLOCKED - the same rule reconcile_execution's callers already
+    use elsewhere: CANCELLED and infra_fault don't count).
+
+    RESERVATION_STALE_MINUTES is a belt-and-suspenders sanity check, not the
+    primary safety mechanism (the primary one is "this only runs once, at
+    process start-up, before anything new could exist yet") - it exists so
+    that a reservation somehow written moments before this happened to run
+    (a very fast crash-and-restart cycle) doesn't get reconciled against
+    log files that are still actively being written to by a batch that
+    hasn't finished starting up. In practice this should be at least a few
+    minutes given process start-up time and Bedrock/Playwright latency.
+
+    Returns a list of {exec_id, access_code, reserved_count, actual_count,
+    released} dicts, one per reservation that was resolved, for logging by
+    the caller. Never raises - a failure reconciling one entry is logged in
+    the return value's place and does not stop the rest from being
+    processed, since this runs unattended at start-up with no one to
+    approve a retry."""
+    resolved = []
+    with _lock:
+        reservations = _load_reservations()
+    if not reservations:
+        return resolved
+    now = datetime.now(timezone.utc)
+    for exec_id, entry in list(reservations.items()):
+        try:
+            reserved_at = datetime.fromisoformat(entry.get("reserved_at", ""))
+        except Exception:
+            # A missing/corrupt timestamp must fail toward "treat as
+            # abandoned and reconcile it," not the reverse. Defaulting this
+            # to `now` (as an earlier version of this function did) makes
+            # age_minutes compute to ~0 every time this function ever runs
+            # again in the future too, since a fresh `now` is substituted at
+            # each future startup as well - permanently orphaning that
+            # reservation's debited quota with no way to ever age out,
+            # which is the exact failure this function exists to prevent.
+            reserved_at = datetime.min.replace(tzinfo=timezone.utc)
+        age_minutes = (now - reserved_at).total_seconds() / 60.0
+        if age_minutes < RESERVATION_STALE_MINUTES:
+            # Too recent to safely assume abandoned - leave it in the ledger
+            # for a later start-up (or the batch's own normal completion,
+            # if it turns out this process didn't actually crash after all -
+            # e.g. a fast restart racing this very check).
+            continue
+        access_code = entry.get("access_code", "")
+        reserved_count = entry.get("requested_count", 0)
+        try:
+            actual_count = count_actual_fn(access_code, exec_id)
+        except Exception as e:
+            resolved.append({
+                "exec_id": exec_id, "access_code": access_code,
+                "reserved_count": reserved_count, "actual_count": None,
+                "released": 0, "error": str(e),
+            })
+            continue
+        before = get_quota(access_code)
+        before_consumed = (before or {}).get("consumed_execution_count", 0)
+        reconcile_execution(access_code, reserved_count, actual_count, exec_id=exec_id)
+        after = get_quota(access_code)
+        after_consumed = (after or {}).get("consumed_execution_count", 0)
+        resolved.append({
+            "exec_id": exec_id, "access_code": access_code,
+            "reserved_count": reserved_count, "actual_count": actual_count,
+            "released": before_consumed - after_consumed,
+        })
+    return resolved
 
 
 def record_executed(access_code: str, executed_count: int) -> int | None:
