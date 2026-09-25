@@ -78,25 +78,89 @@ def pacing_enabled() -> bool:
     return rpm_limit() > 0
 
 
+class GateCancelled(Exception):
+    """Raised out of _RequestGate.acquire (2026-09-25, see the Run Control
+    Center cancel mechanism) when the caller's own cancel_event is set while
+    it is still waiting in line for its RPM turn - i.e. BEFORE it was ever
+    granted a slot, so the request this would have paid for is never sent at
+    all. This is strictly opt-in: acquire() only checks cancel_event when a
+    caller explicitly passes one (only the live-execution path does today -
+    see execute_engine.py); every other caller's behavior is completely
+    unaffected, so this cannot regress generation or any execution run that
+    doesn't pass a cancel_event. execute_engine.py catches this and re-raises
+    its own ExecutionCancelled so main.py has one exception type to handle
+    regardless of whether the cancellation was caught here (mid-queue) or
+    in the step loop (before the next call is even attempted)."""
+    pass
+
+
 class _RequestGate:
     def __init__(self):
         self._cv = threading.Condition()
+        # "interactive" stays a plain FIFO list of tickets (unchanged - see
+        # the fairness note below for why only "background" needed this).
+        # "background" entries are (ticket, client_key) tuples so the shared
+        # execution capacity can be handed out fairly across clients rather
+        # than strict first-come-first-served, which would let one client's
+        # big batch push every other client's queued run to the back for the
+        # whole batch's duration - see claude/council-review-worst-case-rpm-
+        # mitigation-2026-09-25.md, item 3 ("per-client fairness"). A single
+        # client (client_key == "" for every entry, e.g. execution requests
+        # that don't pass one) degenerates back to exact FIFO, so this is a
+        # no-behavior-change default when nothing supplies a client_key.
         self._queues = {"interactive": [], "background": []}
+        self._last_background_key = None
         self._next_ticket = 0
         self._next_slot = 0.0          # earliest time the next grant may happen
         self._interactive_streak = 0
         self.stats = {"grants": 0, "throttled": 0, "waited_s": 0.0}
 
+    def _background_head(self):
+        """Round-robin fair pick for the background queue: cycle through the
+        distinct client_keys currently waiting, starting just after whichever
+        key was granted last, and within the next key in that rotation grant
+        its EARLIEST-arrived ticket. Returns None if the background queue is
+        empty. Falls back to plain FIFO when every waiting entry shares one
+        client_key (including the common "no key supplied" case)."""
+        back = self._queues["background"]
+        if not back:
+            return None
+        keys_in_order = []
+        for _, k in back:
+            if k not in keys_in_order:
+                keys_in_order.append(k)
+        if len(keys_in_order) == 1:
+            return back[0][0]
+        if self._last_background_key in keys_in_order:
+            start = keys_in_order.index(self._last_background_key)
+            rotated = keys_in_order[start + 1:] + keys_in_order[:start + 1]
+        else:
+            rotated = keys_in_order
+        next_key = rotated[0]
+        candidates = [t for t, k in back if k == next_key]
+        return min(candidates)
+
     def _head_is(self, ticket, priority) -> bool:
         inter, back = self._queues["interactive"], self._queues["background"]
         if inter and back and self._interactive_streak >= INTERACTIVE_STREAK_MAX:
-            return priority == "background" and back[0] == ticket
+            return priority == "background" and self._background_head() == ticket
         if inter:
             return priority == "interactive" and inter[0] == ticket
-        return priority == "background" and bool(back) and back[0] == ticket
+        return priority == "background" and self._background_head() == ticket
 
-    def acquire(self, priority: str = "background", clock=time) -> float:
-        """Blocks until this request may be sent. Returns seconds waited."""
+    def acquire(self, priority: str = "background", clock=time, client_key: str = "", cancel_event=None) -> float:
+        """Blocks until this request may be sent. Returns seconds waited.
+        client_key (e.g. an access code) only affects fairness within the
+        "background" priority - see _background_head above; ignored for
+        "interactive".
+
+        cancel_event (2026-09-25, opt-in, see GateCancelled above): if given
+        and set while this call is still waiting for its turn - i.e. before
+        it has been granted a slot - raises GateCancelled instead of
+        eventually sending the request. Checked on every wake of the wait
+        loop below (at most ~1s apart), so a cancellation is caught promptly
+        without adding any polling of its own. A caller that never passes
+        cancel_event sees no behavior change whatsoever."""
         limit = rpm_limit()
         if limit <= 0:
             return 0.0
@@ -104,12 +168,21 @@ class _RequestGate:
         start = clock.time()
         with self._cv:
             ticket = self._next_ticket; self._next_ticket += 1
-            self._queues[priority].append(ticket)
+            if priority == "background":
+                self._queues[priority].append((ticket, client_key or ""))
+            else:
+                self._queues[priority].append(ticket)
             try:
                 while True:
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise GateCancelled()
                     now = clock.time()
                     if self._head_is(ticket, priority) and now >= self._next_slot:
-                        self._queues[priority].pop(0)
+                        if priority == "background":
+                            self._queues[priority] = [e for e in self._queues[priority] if e[0] != ticket]
+                            self._last_background_key = client_key or ""
+                        else:
+                            self._queues[priority].pop(0)
                         self._next_slot = max(now, self._next_slot) + 60.0 / limit
                         if priority == "interactive":
                             self._interactive_streak += 1
@@ -121,10 +194,23 @@ class _RequestGate:
                         self._cv.notify_all()
                         return waited
                     timeout = max(0.05, self._next_slot - now) if self._head_is(ticket, priority) else 1.0
+                    if cancel_event is not None:
+                        # Bound how long a wake-up can be deferred so a
+                        # cancellation is noticed promptly even though
+                        # cancel_event.set() (called from job_registry, a
+                        # different thread) has no way to wake this
+                        # condition variable directly - polling at this
+                        # interval is what catches it instead of waiting for
+                        # the next natural wake (which could otherwise be
+                        # the full remaining queue wait).
+                        timeout = min(timeout, 0.5)
                     self._cv.wait(timeout=timeout)
             except BaseException:
-                if ticket in self._queues[priority]:
-                    self._queues[priority].remove(ticket)
+                if priority == "background":
+                    self._queues[priority] = [e for e in self._queues[priority] if e[0] != ticket]
+                else:
+                    if ticket in self._queues[priority]:
+                        self._queues[priority].remove(ticket)
                 self._cv.notify_all()
                 raise
 
@@ -154,13 +240,14 @@ RATE_RETRY_COOLDOWNS = _env_cooldowns("REQ2QA_RATE_RETRY_COOLDOWNS", [8, 15, 30,
 
 
 class _PacedMessages:
-    def __init__(self, inner, priority):
-        self._inner, self._priority = inner, priority
+    def __init__(self, inner, priority, client_key="", cancel_event=None):
+        self._inner, self._priority, self._client_key = inner, priority, client_key
+        self._cancel_event = cancel_event
 
     def create(self, **kwargs):
         last_exc = None
         for attempt in range(RATE_RETRY_ATTEMPTS):
-            _GATE.acquire(self._priority)
+            _GATE.acquire(self._priority, client_key=self._client_key, cancel_event=self._cancel_event)
             try:
                 return self._inner.create(**kwargs)
             except RateLimitError as e:
@@ -173,9 +260,9 @@ class _PacedMessages:
 class _PacedClient:
     """Wraps an Anthropic/AnthropicBedrock client; only messages.create is
     gated, everything else passes through untouched."""
-    def __init__(self, inner, priority):
+    def __init__(self, inner, priority, client_key="", cancel_event=None):
         self._inner = inner
-        self.messages = _PacedMessages(inner.messages, priority)
+        self.messages = _PacedMessages(inner.messages, priority, client_key, cancel_event)
 
     def __getattr__(self, name):
         return getattr(self._inner, name)
@@ -191,7 +278,7 @@ BEDROCK_MODEL_ID = "au.anthropic.claude-sonnet-4-6"
 BEDROCK_REGION = os.environ.get("AWS_REGION", "ap-southeast-2")
 
 
-def get_client(api_key: str | None = None, priority: str = "interactive"):
+def get_client(api_key: str | None = None, priority: str = "interactive", client_key: str = "", cancel_event=None):
     """
     Returns an Anthropic-API-compatible client. `api_key` is accepted for
     backward compatibility with existing call sites (which currently read
@@ -200,6 +287,17 @@ def get_client(api_key: str | None = None, priority: str = "interactive"):
     Bedrock path, which authenticates via standard AWS credential
     environment variables (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY),
     resolved automatically by boto3.
+
+    client_key (Stage 0, 2026-09-25): only meaningful for priority=
+    "background" (live execution) - see _RequestGate._background_head in
+    this file for the per-client fairness this feeds. Pass the caller's
+    access_code. Ignored for priority="interactive" and for the RPM-pacing-
+    disabled (REQ2QA_RPM_LIMIT=0) path.
+
+    cancel_event (2026-09-25): opt-in - see GateCancelled's docstring. Pass
+    a threading.Event to let a queued (not-yet-sent) request be cancelled
+    for real instead of only being caught on the following step. Omit it
+    (the default) for no behavior change at all.
     """
     provider = os.environ.get("AI_PROVIDER", "anthropic").strip().lower()
 
@@ -232,11 +330,11 @@ def get_client(api_key: str | None = None, priority: str = "interactive"):
                 "routing."
             )
         if pacing_enabled():
-            return _PacedClient(AnthropicBedrock(aws_region=BEDROCK_REGION, max_retries=0), priority)
+            return _PacedClient(AnthropicBedrock(aws_region=BEDROCK_REGION, max_retries=0), priority, client_key, cancel_event)
         return AnthropicBedrock(aws_region=BEDROCK_REGION)
 
     if pacing_enabled():
-        return _PacedClient(Anthropic(api_key=api_key, max_retries=0), priority)
+        return _PacedClient(Anthropic(api_key=api_key, max_retries=0), priority, client_key, cancel_event)
     return Anthropic(api_key=api_key)
 
 
