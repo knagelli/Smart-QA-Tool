@@ -1750,6 +1750,30 @@ def execute_test_case(
                                                "cache_write": c_write, "output": out_t})
                 except Exception:
                     pass
+
+                # Cancellation check (2026-09-25, Finding 4 - see
+                # claude/council-review-four-revenue-risk-findings-deep-dive-
+                # 2026-09-25.md): the two existing cancellation points (top of
+                # the step loop, and GateCancelled while queued for an RPM
+                # turn) both run BEFORE a request is sent, so a Stop clicked
+                # while this exact response was already in flight had no
+                # effect - the response above still came back, is still
+                # billed (already logged just above; that part is genuinely
+                # unavoidable once the request was sent), and previously it
+                # would ALSO still be appended and acted on: its tool call(s)
+                # would still run against the live browser, and the loop
+                # would still continue to a further, entirely avoidable step.
+                # Checking here, immediately after the response is back but
+                # before it is appended to history or acted on, closes the
+                # "still acted" half of that gap - the one part that was
+                # genuinely avoidable - even though the spend on this one
+                # already-sent response cannot be undone.
+                if cancel_event is not None and cancel_event.is_set():
+                    if rl is not None:
+                        rl.event("step", {"step": step_num, "action": "cancelled",
+                                           "note": "client requested stop (response already received; discarding before acting)"})
+                    raise ExecutionCancelled()
+
                 messages.append({"role": "assistant", "content": response.content})
 
                 tool_uses = [b for b in response.content if b.type == "tool_use"]
