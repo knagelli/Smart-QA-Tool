@@ -823,13 +823,15 @@ def _snapshot_stub(payload: dict) -> str:
     })
 
 
-def _messages_for_model(messages: list, keep: int) -> list:
-    """HISTORY_KEEP_SNAPSHOTS: a copy of the conversation in which only the
-    latest `keep` get_snapshot results are sent in full. The stored
-    conversation is never modified. tool_use/tool_result pairing and order
-    are preserved exactly (only the result *content* string changes)."""
+def _stale_snapshot_positions(messages: list, keep: int) -> set:
+    """Shared by _messages_for_model and _with_history_cache_breakpoint
+    (2026-09-25 - see the cache-breakpoint fix below for why these two need
+    to agree on the same boundary). Returns the set of (msg_index,
+    block_index) pairs identifying every get_snapshot result OLDER than the
+    most recent `keep` - i.e. the ones _messages_for_model will replace with
+    a stub. Pure/side-effect-free: does not touch `messages`."""
     if not keep or keep <= 0:
-        return messages
+        return set()
     snap_positions = []  # (msg_index, block_index)
     for mi, m in enumerate(messages):
         if m["role"] != "user" or not isinstance(m["content"], list):
@@ -844,7 +846,23 @@ def _messages_for_model(messages: list, keep: int) -> list:
                         is_snap = False
                     if is_snap:
                         snap_positions.append((mi, bi))
-    stale = set(snap_positions[:-keep])
+    return set(snap_positions[:-keep])
+
+
+def _messages_for_model(messages: list, keep: int, stale: set = None) -> list:
+    """HISTORY_KEEP_SNAPSHOTS: a copy of the conversation in which only the
+    latest `keep` get_snapshot results are sent in full. The stored
+    conversation is never modified. tool_use/tool_result pairing and order
+    are preserved exactly (only the result *content* string changes).
+
+    `stale` (2026-09-25): pass the result of _stale_snapshot_positions if
+    the caller already computed it (as the per-step loop now does, to also
+    derive the cache-breakpoint boundary from the SAME set - see
+    _with_history_cache_breakpoint) rather than recomputing it here."""
+    if not keep or keep <= 0:
+        return messages
+    if stale is None:
+        stale = _stale_snapshot_positions(messages, keep)
     if not stale:
         return messages
     out = []
@@ -865,7 +883,7 @@ def _messages_for_model(messages: list, keep: int) -> list:
     return out
 
 
-def _with_history_cache_breakpoint(messages_to_send: list) -> list:
+def _with_history_cache_breakpoint(messages_to_send: list, stable_boundary_mi: int = None) -> list:
     """Cost fix (2026-09-25, see claude/bedrock-cost-analysis-caching-gaps-
     2026-09-25.md): the system prompt and tools list were already cached, but
     the conversation history - which grows every step and is 90%+ identical
@@ -874,37 +892,75 @@ def _with_history_cache_breakpoint(messages_to_send: list) -> list:
     input grew 337 -> 17,014 tokens; simulating an incremental cache
     breakpoint here gave an estimated 75% cost reduction on that run.
 
-    Anthropic's prompt caching is prefix-based: placing cache_control on the
-    LAST content block of the message list caches everything up to and
-    including that block. On the next step, if that same prefix is sent
-    again unchanged plus new content appended after it, the prefix is served
-    from cache at ~10% of input price instead of full price - this is what
-    makes it "grow": each step's cache write becomes the next step's cache
-    read, for the part of history that hasn't changed.
+    Anthropic's prompt caching is prefix-based: placing cache_control on a
+    content block caches everything up to and including that block. On the
+    next step, if that same prefix is sent again byte-for-byte unchanged,
+    it's served from cache at ~10% of input price instead of full price -
+    this is what makes it "grow": each step's cache write becomes the next
+    step's cache read, for the part of history that hasn't changed.
+
+    CORRECTED 2026-09-25 (see claude/council-review-10rpm-cost-performance-
+    tuning-2026-09-25.md): the original version of this function put the
+    ONLY breakpoint on the last message, which is unique on every single
+    step (it's whatever action/snapshot just came back). Anthropic's cache
+    match requires the WHOLE marked prefix to be byte-identical to what was
+    cached before, so a breakpoint on ever-changing content can never hit -
+    it silently rewrote the entire growing history into cache, at
+    cache_write price (12.5x cache_read price), on nearly every step. Worse,
+    HISTORY_KEEP_SNAPSHOTS compaction makes this happen even more often than
+    "last message changed" alone would: every time the sliding keep-window
+    advances, an OLDER message (one that sat safely before the old
+    breakpoint) gets rewritten into a stub for the first time - changing
+    content that a correct cache design would never need to touch again.
+
+    The fix: TWO breakpoints, not one. `stable_boundary_mi` - the boundary
+    _stale_snapshot_positions computed (the newest message already stubbed,
+    i.e. permanently stable content that will never change again) - gets
+    its own breakpoint, in addition to the existing one on the very last
+    message. The region up to stable_boundary_mi only grows by strict
+    append (a message moves from "not yet stubbed" to "stubbed" exactly
+    once, then never changes again), so once two consecutive steps agree on
+    the same boundary, that whole prefix is a guaranteed cache HIT - and
+    even on a step where the boundary just advanced by one message, only
+    that one step's cache_write pays for the newly-stabilized content, not
+    the entire history. The last `HISTORY_KEEP_SNAPSHOTS` full snapshots
+    plus the newest turn (the genuinely-still-changing tail) are covered by
+    the second, pre-existing breakpoint on the last message, same as before
+    - small and bounded, not the whole conversation.
+
+    Total ephemeral breakpoints per request (tools + system + up to 2 here)
+    is at most 4, exactly Anthropic's limit - not over it. When
+    stable_boundary_mi is None (HISTORY_KEEP_SNAPSHOTS disabled, or no
+    snapshot has aged out yet) or equals the last message's index (nothing
+    to gain from a second breakpoint there), only the single last-message
+    breakpoint is set, matching the original behavior for that case exactly.
 
     This returns a NEW list (does not mutate `messages_to_send`, which may
     be the original stored `messages` list when HISTORY_KEEP_SNAPSHOTS is
-    disabled) with a cache_control breakpoint added to the last block of the
-    last message. Total ephemeral breakpoints per request (tools + system +
-    this) stays at 3, under Anthropic's 4-breakpoint limit.
-
-    Cache hits require an EXACT match of the cached prefix. When
-    _messages_for_model rewrites an older snapshot into a stub (see above),
-    that step's history differs from what was cached before, so that one
-    step's cache is a miss - it still works, it's simply not free that one
-    time. This is expected and does not affect correctness."""
+    disabled)."""
     if not HISTORY_CACHE_ENABLED or not messages_to_send:
         return messages_to_send
-    last_msg = messages_to_send[-1]
-    content = last_msg.get("content")
-    if not isinstance(content, list) or not content:
-        return messages_to_send
-    new_content = list(content)
-    last_block = dict(new_content[-1])
-    last_block["cache_control"] = {"type": "ephemeral"}
-    new_content[-1] = last_block
     out = list(messages_to_send)
-    out[-1] = {**last_msg, "content": new_content}
+    last_index = len(out) - 1
+
+    def _mark(idx: int) -> bool:
+        msg = out[idx]
+        content = msg.get("content")
+        if not isinstance(content, list) or not content:
+            return False
+        new_content = list(content)
+        last_block = dict(new_content[-1])
+        last_block["cache_control"] = {"type": "ephemeral"}
+        new_content[-1] = last_block
+        out[idx] = {**msg, "content": new_content}
+        return True
+
+    if (
+        stable_boundary_mi is not None
+        and 0 <= stable_boundary_mi < last_index
+    ):
+        _mark(stable_boundary_mi)
+    _mark(last_index)
     return out
 
 
@@ -1665,8 +1721,30 @@ def execute_test_case(
                 # (the exact defect this session spent significant time
                 # diagnosing from a bare 403 traceback) is diagnosable in
                 # seconds from the log, not by re-deriving it from scratch.
-                messages_to_send = _messages_for_model(messages, HISTORY_KEEP_SNAPSHOTS)
-                messages_to_send = _with_history_cache_breakpoint(messages_to_send)
+                # 2026-09-25 cache-breakpoint fix: compute the stale-snapshot
+                # set ONCE and hand it to both functions, so the cache
+                # breakpoint's boundary is exactly the compaction boundary,
+                # not a second, independently-derived guess at it - see
+                # _with_history_cache_breakpoint's docstring.
+                #
+                # Deployment-council review (2026-09-25) flagged that this
+                # chain, unlike est_tokens right below it, wasn't defensively
+                # wrapped: if any of these three calls ever hit an
+                # unanticipated message shape (e.g. a non-dict content
+                # block), it would throw unhandled and crash the whole test
+                # case's step loop instead of just losing the cache-cost
+                # optimization. Fixed to fail open: on any exception here,
+                # fall back to the unmodified `messages` list (no compaction,
+                # no cache breakpoint) so a bug in this cost optimization can
+                # never itself take down a test run.
+                try:
+                    _stale_positions = _stale_snapshot_positions(messages, HISTORY_KEEP_SNAPSHOTS)
+                    messages_to_send = _messages_for_model(messages, HISTORY_KEEP_SNAPSHOTS, stale=_stale_positions)
+                    _stable_boundary_mi = max((mi for mi, _bi in _stale_positions), default=None)
+                    messages_to_send = _with_history_cache_breakpoint(messages_to_send, stable_boundary_mi=_stable_boundary_mi)
+                except Exception:
+                    logger.exception("cache-breakpoint/compaction step failed - falling back to uncompacted, uncached messages for this step")
+                    messages_to_send = messages
                 est_tokens = 0
                 if TPM_BUDGET > 0:
                     try:
