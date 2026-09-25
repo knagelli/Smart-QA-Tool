@@ -223,6 +223,19 @@ class ExecutionError(Exception):
     pass
 
 
+class ExecutionCancelled(Exception):
+    """Raised when a client-requested cancellation (see app/job_registry.py)
+    is observed inside execute_test_case's step loop, before the next model
+    call is sent - this is deliberately NOT a subclass of ExecutionError:
+    a cancellation is not a fault (ours or the client's environment's), it's
+    a person choosing to stop, and the caller (main.py) must be able to tell
+    the two apart to report a distinct CANCELLED verdict and to exclude it
+    from the client's execution allowance the same way an infra fault is
+    excluded - see claude/council-review-four-audit-findings-resource-burn-
+    2026-09-25.md, Finding 1."""
+    pass
+
+
 class EnvironmentUnreachableError(ExecutionError):
     """Raised specifically when the client's own env_url didn't respond in
     time (2026-09-23 - see claude/[pending]-bedrock-rate-limit-and-error-
@@ -1422,6 +1435,8 @@ def execute_test_case(
     shots_dir: Path,
     rl=None,
     on_step=None,
+    access_code: str = "",
+    cancel_event=None,
 ) -> dict:
     """Runs one test case against env_url using the given (sandbox-only,
     generic test-user) credentials. Returns a dict: verdict, notes,
@@ -1438,15 +1453,28 @@ def execute_test_case(
     Raises ExecutionError on unrecoverable setup failures (bad URL, browser
     launch failure, etc.) - the caller is expected to catch this and show
     a generic error, per the app's existing error-handling convention.
+    Raises ExecutionCancelled (2026-09-25, see app/job_registry.py) if
+    cancel_event is set before a step's model call is sent - deliberately
+    NOT an ExecutionError subclass, see that exception's docstring.
 
     on_step, if given, is called after every agent step as
     on_step(step_num, MAX_AGENT_STEPS) - purely for the caller to publish
     live progress (see exec_status.py); never raises, and any exception it
     raises is swallowed so a status-tracking bug can never break a live run.
+
+    access_code (Stage 0, 2026-09-25): passed through to ai_client.get_client
+    as the fairness client_key, so this test case's requests share the
+    background RPM queue fairly with other clients' concurrent executions -
+    see ai_client._RequestGate._background_head. Purely a scheduling hint;
+    never logged, never sent to the model.
     """
     shots_dir.mkdir(parents=True, exist_ok=True)
     # Test execution is background work: generation (a person waiting) goes first.
-    client = ai_client.get_client(api_key, priority="background")
+    # cancel_event is also handed to the gate itself (2026-09-25) so a
+    # cancellation that arrives while a request is still queued waiting for
+    # its RPM turn is caught right there, before that request is ever sent -
+    # not just on the next step's check below. See ai_client.GateCancelled.
+    client = ai_client.get_client(api_key, priority="background", client_key=access_code, cancel_event=cancel_event)
     step_log = []
     screenshots = []
     created_entity = None
@@ -1610,6 +1638,18 @@ def execute_test_case(
             for step_num in range(MAX_AGENT_STEPS + PASS_REVIEW_EXTRA_STEPS):
                 if step_num >= step_limit:
                     break
+                # Cancellation check (2026-09-25, Finding 1 - see
+                # app/job_registry.py): checked here, before the next model
+                # call is sent, not just between test cases - a single test
+                # case can run 30-50 steps, so stopping "between test cases"
+                # alone wouldn't help if the CURRENT case is the stuck or
+                # unwanted one. Checking before messages.create (rather than
+                # only after the response comes back) is what actually saves
+                # money: the next billed request is never sent at all.
+                if cancel_event is not None and cancel_event.is_set():
+                    if rl is not None:
+                        rl.event("step", {"step": step_num, "action": "cancelled", "note": "client requested stop"})
+                    raise ExecutionCancelled()
                 # Rate-limit retry + distinct IAM/permission diagnostics
                 # (2026-09-23) - see claude/[pending]-bedrock-rate-limit-
                 # and-error-hardening-2026-09-23.md. Root cause of today's
@@ -1660,6 +1700,19 @@ def execute_test_case(
                             messages=messages_to_send,
                         )
                         break
+                    except ai_client.GateCancelled:
+                        # Caught here (2026-09-25) means the cancellation
+                        # arrived while this request was still queued waiting
+                        # for its RPM turn, never actually sent - the better-
+                        # than-originally-designed case: this request is
+                        # saved entirely, not just the next one. Converted to
+                        # the same ExecutionCancelled the step-loop check
+                        # above raises, so main.py only ever needs to handle
+                        # one exception type regardless of which point caught
+                        # the cancellation.
+                        if rl is not None:
+                            rl.event("step", {"step": step_num, "action": "cancelled", "note": "client requested stop (while queued for RPM turn)"})
+                        raise ExecutionCancelled()
                     except PermissionDeniedError as e:
                         logger.error(
                             "Bedrock/Anthropic permission denied - likely an IAM policy or "
