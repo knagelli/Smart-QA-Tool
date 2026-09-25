@@ -25,3 +25,11 @@ pymupdf==1.24.10
 openpyxl==3.1.5
 jinja2==3.1.4
 playwright==1.47.0
+# 2026-09-25: wait_for_text's local, zero-LLM-token fuzzy-paraphrase fallback
+# (execute_engine.py, see claude/wait-for-text-fuzzy-fallback-2026-09-25.md).
+# Optional at runtime by design (execute_engine.py logs a loud startup
+# warning and disables just this one fallback if it's missing, rather than
+# crashing the whole service) - but it MUST be installed on every real
+# deploy for the fallback to actually do anything, so it is pinned here like
+# every other real dependency, not left as a "nice to have."
+rapidfuzz==3.9.7
