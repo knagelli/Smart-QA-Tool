@@ -161,6 +161,70 @@ class TestFailOpenAndDisableSwitch(unittest.TestCase):
             pii_masking._get_ner_analyzer = original_get_analyzer
 
 
+class TestNerEngineExplicitlyPinsSmallModel(unittest.TestCase):
+    """2026-09-27 production OOM incident fix (see pii_masking.py's
+    _get_ner_analyzer docstring): a bare AnalyzerEngine() let Presidio pick
+    its own default model, which turned out to be the large en_core_web_lg
+    on the real deploy - loading it OOM-killed the live service on a
+    1.8GB-RAM EC2 instance. This test confirms the CODE actually requests
+    en_core_web_sm explicitly (by asserting NlpEngineProvider is called
+    with that model name), rather than relying on hoping Presidio's
+    default never changes again."""
+
+    def test_get_ner_analyzer_requests_en_core_web_sm_explicitly(self):
+        import sys
+        import types
+
+        captured = {}
+
+        presidio_analyzer_mod = types.ModuleType("presidio_analyzer")
+        nlp_engine_mod = types.ModuleType("presidio_analyzer.nlp_engine")
+
+        class _FakeAnalyzerEngine:
+            def __init__(self, *a, **k):
+                captured["analyzer_kwargs"] = k
+
+        class _FakeNlpEngineProvider:
+            def __init__(self, nlp_configuration=None):
+                captured["nlp_configuration"] = nlp_configuration
+
+            def create_engine(self):
+                return "fake-engine"
+
+        presidio_analyzer_mod.AnalyzerEngine = _FakeAnalyzerEngine
+        nlp_engine_mod.NlpEngineProvider = _FakeNlpEngineProvider
+        presidio_analyzer_mod.nlp_engine = nlp_engine_mod
+
+        original_modules = {
+            k: sys.modules.get(k) for k in ("presidio_analyzer", "presidio_analyzer.nlp_engine")
+        }
+        sys.modules["presidio_analyzer"] = presidio_analyzer_mod
+        sys.modules["presidio_analyzer.nlp_engine"] = nlp_engine_mod
+        pii_masking._ner_analyzer = None
+        pii_masking._ner_warned = False
+        try:
+            pii_masking._get_ner_analyzer()
+            config = captured.get("nlp_configuration") or {}
+            models = config.get("models", [])
+            self.assertTrue(
+                any(m.get("model_name") == "en_core_web_sm" for m in models),
+                f"expected en_core_web_sm explicitly requested, got: {config}",
+            )
+            self.assertNotIn(
+                "en_core_web_lg",
+                str(config),
+                "must not silently pick the large model that caused the production OOM incident",
+            )
+        finally:
+            for k, v in original_modules.items():
+                if v is None:
+                    sys.modules.pop(k, None)
+                else:
+                    sys.modules[k] = v
+            pii_masking._ner_analyzer = None
+            pii_masking._ner_warned = False
+
+
 class TestNerAnalyzerUnavailableInThisSandbox(unittest.TestCase):
     def test_ner_analyzer_gracefully_reports_unavailable(self):
         # presidio-analyzer is not installed here (no PyPI network access) -

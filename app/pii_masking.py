@@ -83,8 +83,38 @@ def _get_ner_analyzer():
         if _ner_analyzer is not None:
             return _ner_analyzer or None
         try:
-            from presidio_analyzer import AnalyzerEngine  # noqa: F401 (optional dep)
-            _ner_analyzer = AnalyzerEngine()
+            from presidio_analyzer import AnalyzerEngine
+            from presidio_analyzer.nlp_engine import NlpEngineProvider
+
+            # 2026-09-27 PRODUCTION INCIDENT FIX: a bare AnalyzerEngine()
+            # lets Presidio pick its own default spaCy model, which on this
+            # deploy turned out to be en_core_web_lg (the LARGE model,
+            # ~560MB on disk, considerably more once its full word-vector
+            # tables are loaded into memory) - NOT en_core_web_sm (~12MB),
+            # which is the only model this project's requirements.txt/deploy
+            # notes ever asked for. On req2qa's actual EC2 instance (1.8GB
+            # total RAM - confirmed via `free -h`), loading that large model
+            # on top of the existing app footprint plus Playwright/Chromium's
+            # own memory use during live test execution was enough to get
+            # this service OOM-killed in production (systemd/journalctl:
+            # "A process of this unit has been killed by the OOM killer",
+            # 2026-09-27 06:47 UTC - see
+            # claude/pii-masking-oom-incident-fix-2026-09-27.md for the full
+            # incident writeup). Explicitly configuring en_core_web_sm here
+            # closes this - it is the smallest of spaCy's English models
+            # with materially lower memory use, at some cost to NER recall
+            # on person/location/org names (an accuracy-for-memory tradeoff
+            # this instance's RAM budget requires, not a preference). Fails
+            # open exactly like the bare-AnalyzerEngine() path below if
+            # en_core_web_sm itself isn't installed (e.g. a fresh deploy
+            # that hasn't yet run `python -m spacy download en_core_web_sm`)
+            # - regex-only masking still runs regardless.
+            nlp_configuration = {
+                "nlp_engine_name": "spacy",
+                "models": [{"lang_code": "en", "model_name": "en_core_web_sm"}],
+            }
+            nlp_engine = NlpEngineProvider(nlp_configuration=nlp_configuration).create_engine()
+            _ner_analyzer = AnalyzerEngine(nlp_engine=nlp_engine, supported_languages=["en"])
         except Exception as e:
             _ner_analyzer = False
             if not _ner_warned:
