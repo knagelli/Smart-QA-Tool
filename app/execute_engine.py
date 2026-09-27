@@ -179,6 +179,21 @@ PAGE_AFTER_ACTION_SETTLE_MS = _env_int("REQ2QA_PAGE_AFTER_ACTION_SETTLE_MS", 700
 # early import) is now overridden here from REQ2QA_STALL_LIMIT once _env_int
 # exists. Default unchanged.
 STALL_LIMIT = _env_int("REQ2QA_STALL_LIMIT", STALL_LIMIT)
+# Fail-fast tuning (2026-09-27, pending-deploy-checklist priority 6): made
+# env-configurable the same way STALL_LIMIT was, for the same reason - an
+# unrecoverable run grinding on to the full step limit before reporting
+# BLOCKED wastes shared RPM capacity every other client is waiting on.
+# Deliberately NOT lowering the default here: the checklist explicitly
+# flagged that tightening this needs re-verification against the specific
+# false-BLOCKED regressions already fixed this session (the TC-001 quoted-
+# text exemption, and the old-habit-agent stall double-counting fix), and
+# there is no live-run data in this pass to say what a safe tighter number
+# would be - inventing one without that evidence would repeat exactly the
+# "theory presented as fixed" pattern this project has explicitly moved
+# away from. This change gives ops a lever to tune it from `.env` against
+# real production data without a redeploy, without changing today's
+# behavior for anyone who doesn't set the variable.
+MAX_AGENT_STEPS = _env_int("REQ2QA_MAX_AGENT_STEPS", MAX_AGENT_STEPS)
 # Cost fix (2026-09-25): incremental conversation-history cache breakpoint.
 # REQ2QA_HISTORY_CACHE=0 reverts to full-price resend of history every step.
 HISTORY_CACHE_ENABLED = _env_flag("REQ2QA_HISTORY_CACHE", True)
@@ -203,6 +218,189 @@ CLAUSE_EVIDENCE_MAX_REJECTIONS = 2
 WAIT_FOR_TEXT_FUZZY_ENABLED = _env_flag("REQ2QA_WAIT_FUZZY", True) and _RAPIDFUZZ_AVAILABLE
 WAIT_FOR_TEXT_FUZZY_RATIO_THRESHOLD = 0.97
 WAIT_FOR_TEXT_FUZZY_MIN_SHARED_TOKENS = 2
+
+# 2026-09-25 wait_for_text transient-overlay exclusion (TC-007 false-positive
+# root cause, see claude/tc007-root-cause-false-confirmation-2026-09-25.md and
+# claude/council-review-tc007-false-positive-fixes-2026-09-25.md). A candidate
+# phrase intended to confirm a POSITIVE outcome can still exact-match text
+# that only exists transiently inside an open autocomplete/combobox dropdown
+# (e.g. ServiceNow's own "No record found" typeahead row, visible for ~100-
+# 400ms before the dropdown closes) - a textbook Playwright race between an
+# ephemeral async-search widget and durable page state. Deep-research into
+# how this class of bug is normally solved (Playwright issues #35612/#19235/
+# #19315, ariakit #7610/#7611, the W3C ARIA Authoring Practices Guide combobox
+# pattern) converged on excluding matches by ARIA STRUCTURE rather than by
+# app-specific CSS class names, since req2qa runs against arbitrary apps, not
+# just ServiceNow - a class-name blocklist for one app is worthless on the
+# next. This walks up from the matched element (closest()) for role=listbox/
+# option/tooltip/presentation, and separately resolves aria-controls/
+# aria-owns from any expanded ancestor (a portaled dropdown is not always a
+# DOM descendant of its trigger), per the APG combobox pattern. This is a
+# necessary-but-not-sufficient signal (many real apps, including ServiceNow's
+# classic UI, ship non-ARIA-compliant bespoke dropdown markup) - it is fail-
+# open by design: if the element no longer exists or the check itself errors,
+# the match is accepted exactly as it was before this fix, never rejected due
+# to an internal bug here.
+#
+# 2026-09-25 council certification round (Salesforce + ServiceNow automation
+# specialists) required two changes before this could ship:
+#
+# 1. (Salesforce reviewer) The original ancestor-walk used `el.closest()` and
+#    `document.getElementById()`, neither of which crosses a shadow-DOM
+#    boundary. Lightning Web Components render into native shadow roots, so
+#    a listbox living in a different shadow tree than the matched text (or
+#    an aria-owns/aria-controls id target inside a shadow root) would
+#    silently never be found. `_walkUp` below climbs via parentElement and,
+#    on reaching a shadow root, continues from its host (mirroring the
+#    shadow-walk already used correctly by _ALERT_SIGNATURE_JS); `_findById`
+#    replaces the plain getElementById with the same recursive shadow-aware
+#    search.
+#
+# 2. (ServiceNow reviewer, plain and important) ARIA-structure exclusion
+#    alone is a NO-OP against ServiceNow classic UI's AJAXTableCompleter
+#    dropdown, which is bare, non-ARIA divs - meaning this predicate as
+#    originally written would NOT have fixed TC-007's actual false positive,
+#    only protected ARIA-compliant apps like Salesforce. Per the reviewer's
+#    explicit recommendation, an app-agnostic (not ServiceNow-named)
+#    ephemerality+geometry fallback is OR'd in: an absolutely/fixed-
+#    positioned, high-z-index element sitting directly below/adjacent to the
+#    currently-focused (or last-focused) form field is treated as a likely
+#    dropdown/overlay panel regardless of ARIA markup. This is a heuristic,
+#    not a certainty - see the docstring on _wait_for_text_geometry_check for
+#    its known false-positive/false-negative shape.
+_TRANSIENT_OVERLAY_JS = """
+(el) => {
+    const _findById = (id) => {
+        const direct = document.getElementById(id);
+        if (direct) return direct;
+        const stack = [document];
+        while (stack.length) {
+            const root = stack.pop();
+            const found = root.getElementById ? root.getElementById(id) : null;
+            if (found) return found;
+            for (const h of root.querySelectorAll('*')) { if (h.shadowRoot) stack.push(h.shadowRoot); }
+        }
+        return null;
+    };
+    const _walkUp = (start, visit) => {
+        let node = start;
+        while (node) {
+            if (visit(node)) return true;
+            node = node.parentElement || (node.getRootNode && node.getRootNode() instanceof ShadowRoot
+                ? node.getRootNode().host : null);
+        }
+        return false;
+    };
+    if (_walkUp(el, (n) => n.closest && n.closest('[role="listbox"], [role="option"], [role="tooltip"], [role="presentation"]'))) {
+        return true;
+    }
+    if (_walkUp(el, (n) => {
+        if (n.getAttribute && n.getAttribute('aria-expanded') === 'true') {
+            const ctrlId = n.getAttribute('aria-controls') || n.getAttribute('aria-owns');
+            if (ctrlId) {
+                const popup = _findById(ctrlId);
+                if (popup && popup.contains(el)) return true;
+            }
+        }
+        return false;
+    })) {
+        return true;
+    }
+    // Fallback for apps (ServiceNow classic UI confirmed among them) whose
+    // autocomplete dropdown carries no ARIA structure at all: a floating
+    // (absolute/fixed), elevated-z-index panel sitting directly beneath the
+    // active/last-focused field is treated as a likely transient overlay.
+    // Deliberately app-agnostic - no class names, no ids.
+    const active = document.activeElement;
+    let container = el;
+    while (container && container !== document.body) {
+        const cs = getComputedStyle(container);
+        if (cs.position === 'absolute' || cs.position === 'fixed') {
+            const z = parseInt(cs.zIndex, 10) || 0;
+            const box = container.getBoundingClientRect();
+            const ref = (active && active !== document.body) ? active.getBoundingClientRect() : null;
+            const nearActiveField = ref && Math.abs(box.top - ref.bottom) < 80 &&
+                box.left < ref.right && box.right > ref.left;
+            if (z >= 100 || nearActiveField) return true;
+            break;
+        }
+        container = container.parentElement || (container.getRootNode && container.getRootNode() instanceof ShadowRoot
+            ? container.getRootNode().host : null);
+    }
+    return false;
+}
+"""
+
+# 2026-09-25 validation-error signal folded into stall-detection fingerprint
+# (see the same two docs above). get_snapshot's fingerprint was previously
+# built only from INTERACTIVE elements' accessibility roles/labels, so a
+# static validation banner (e.g. ServiceNow's "Invalid reference") was
+# structurally invisible to stall detection - a genuine page change was
+# logged as "no change". Deliberately scoped to role=alert/status/aria-live/
+# aria-invalid only (durable, validation-oriented signals) and NOT toasts or
+# banners generally - a fresh council review flagged that an auto-dismissing
+# toast could flicker the fingerprint and mask a real stall elsewhere, and
+# there is no debounce/persistence layer here yet to safely absorb that.
+#
+# 2026-09-25 council certification: the ServiceNow reviewer confirmed
+# ServiceNow classic UI's own validation errors are unlikely to carry
+# aria-invalid/role=alert reliably. A second, app-agnostic (no class-name
+# guessing) signal is folded in alongside the ARIA one: any visible element
+# whose className matches a broad error/invalid/warn/reject word AND whose
+# computed border or outline color falls in a red/warning hue - this stays
+# generic (no ServiceNow-specific selector) while adding coverage for apps
+# that signal validation state through styling rather than ARIA.
+_ALERT_SIGNATURE_JS = """
+() => {
+    const sel = '[role="alert"], [role="status"], [aria-live], [aria-invalid="true"]';
+    const classHint = /error|invalid|warn|reject/i;
+    const isWarnHue = (color) => {
+        const m = /rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/.exec(color || '');
+        if (!m) return false;
+        const [r, g, b] = [+m[1], +m[2], +m[3]];
+        return r > 140 && r - g > 40 && r - b > 20;
+    };
+    const seen = [];
+    const walk = (root) => {
+        for (const el of root.querySelectorAll(sel)) {
+            const r = el.getBoundingClientRect();
+            if (r.width === 0 && r.height === 0) continue;
+            seen.push((el.innerText || el.getAttribute('aria-label') || '').trim().slice(0, 200));
+        }
+        for (const el of root.querySelectorAll('*')) {
+            if (!(typeof el.className === 'string' && classHint.test(el.className))) continue;
+            const r = el.getBoundingClientRect();
+            if (r.width === 0 && r.height === 0) continue;
+            const cs = getComputedStyle(el);
+            if (isWarnHue(cs.borderColor) || isWarnHue(cs.outlineColor) || isWarnHue(cs.color)) {
+                seen.push((el.innerText || '').trim().slice(0, 200));
+            }
+        }
+        for (const h of root.querySelectorAll('*')) { if (h.shadowRoot) walk(h.shadowRoot); }
+    };
+    walk(document);
+    return seen.filter(Boolean).sort().join('|');
+}
+"""
+
+
+def _alert_signature(page) -> tuple:
+    """One string per visible frame of concatenated validation/alert text
+    (see _ALERT_SIGNATURE_JS) - folded into _snapshot_fingerprint so a
+    validation error appearing/changing/disappearing counts as a real page
+    change. Fails open (empty string for a frame) on any per-frame error,
+    since this must never be able to break stall detection itself."""
+    sigs = []
+    try:
+        frames = _visible_frames(page)
+    except Exception:
+        return tuple()
+    for frame in frames:
+        try:
+            sigs.append(frame.evaluate(_ALERT_SIGNATURE_JS))
+        except Exception:
+            sigs.append("")
+    return tuple(sigs)
 _WAIT_FOR_TEXT_STOPWORDS = frozenset((
     "a", "an", "the", "is", "was", "will", "be", "been", "being", "to", "of",
     "in", "on", "at", "for", "with", "and", "or", "this", "that", "it", "its",
@@ -540,6 +738,51 @@ _ELEMENT_INFO_JS = """
 GLOBAL_REF_FRAME_MULTIPLIER = 100000  # see _resolve_ref's docstring
 
 
+def _record_popup_notice(new_page, popup_notices: list) -> None:
+    """2026-09-27 (pending-deploy-checklist priority 14, TC-006/TC-015) - see
+    the call site's comment in execute_test_case for why this exists: a
+    popup/lookup window's contents are invisible to every tool this harness
+    exposes (nothing walks a sibling Page object), so this makes that
+    unsupported case honestly diagnosable - record its url/title, then close
+    it immediately since nothing can act on it and it must never be left to
+    accumulate across a long-running test case. Pulled out as a standalone,
+    independently-testable function rather than an inline closure; fails
+    open (best-effort "(unknown)" values) if the popup page errors before
+    its url/title can be read, and never lets an error here propagate out
+    and interrupt the run in progress.
+
+    2026-09-27 council review (correctness + Playwright specialist) required
+    two changes to the first version of this function:
+    - about:blank race: at the moment this fires the popup may genuinely
+      still be on about:blank (common for window.open() with no URL, then a
+      JS-driven navigation) - a plain wait_for_load_state("domcontentloaded")
+      can be satisfied by that placeholder document itself, silently
+      recording a meaningless URL/title without ever raising. A short extra
+      wait for the URL to move off about:blank makes the recorded value
+      meaningful when the app populates it in time, and degrades honestly
+      (keeps whatever was last read) rather than pretending success when it
+      doesn't.
+    - the caller is expected to record which step this happened on (see the
+      call site) so the notice can be treated as single-shot rather than
+      echoing forward onto unrelated later steps."""
+    try:
+        new_page.wait_for_load_state("domcontentloaded", timeout=2000)
+    except Exception:
+        pass
+    try:
+        new_page.wait_for_url(lambda u: u != "about:blank", timeout=1500)
+    except Exception:
+        pass  # still about:blank (or errored) - record whatever is true now, honestly
+    try:
+        popup_notices.append({"url": new_page.url, "title": new_page.title()})
+    except Exception:
+        popup_notices.append({"url": "(unknown)", "title": "(unknown)"})
+    try:
+        new_page.close()
+    except Exception:
+        pass
+
+
 def _visible_frames(page) -> list:
     """Every frame worth searching for interactive elements: the main frame,
     plus every child/nested frame that is currently visible (nonzero size,
@@ -762,8 +1005,17 @@ def _snapshot_fingerprint(page, elements: list) -> tuple:
     _ELEMENT_INFO_JS docstring note above for the confirmed false-positive
     this closes (typing into a field, or toggling a checkbox/radio, no
     longer looks identical to the previous snapshot just because the
-    element's static label didn't change)."""
-    return (page.url, tuple((e["tag"], e["role"], e["label"], e.get("value_hash", 0)) for e in elements))
+    element's static label didn't change).
+
+    alert_sig (2026-09-25, see claude/tc007-root-cause-false-confirmation-
+    2026-09-25.md) closes a second, independent gap: a static validation
+    banner is not an interactive element, so it was previously invisible to
+    this fingerprint entirely. Fails open to an empty tuple on any error."""
+    try:
+        alert_sig = _alert_signature(page)
+    except Exception:
+        alert_sig = tuple()
+    return (page.url, tuple((e["tag"], e["role"], e["label"], e.get("value_hash", 0)) for e in elements), alert_sig)
 
 
 def _element_locator(page, ref: int):
@@ -1595,6 +1847,7 @@ Rules:
 - Each page-changing action (click, type_text, select_option, upload_file) returns the updated page in its result - read it there instead of calling get_snapshot again. Each extra request slows the run.
 - Verdicts must rest on what you OBSERVED, never on assumptions. If the test's precondition cannot be met in this environment (e.g. it requires a different user role than the one you are logged in as, or data that does not exist), call finish_test with BLOCKED and name the unmet precondition - never PASS by reasoning about how the system "would" behave for a different role or setup.
 - If you use a different control or method than the steps specify (e.g. type-ahead instead of a lookup popup), say so in your notes. That step only counts as met if your substitute exercises the same behavior the step is testing; otherwise the verdict cannot be PASS.
+- If a snapshot result includes "unsupported_popup_opened", the action you just took opened a separate popup/lookup window (already closed automatically) whose contents you cannot see or interact with. Only treat this as blocking if the step you were just performing actually depended on that popup (e.g. a lookup/magnifying-glass icon meant to open a picker) - if so, do not keep retrying that action; call finish_test with BLOCKED and name the popup/lookup window as the unmet precondition, quoting its title/URL from that field if useful. If the popup was incidental to what this step needed (e.g. a help/documentation/print link you did not intend to use), ignore this field and continue the test normally.
 - For PASS, fill clause_evidence: one entry per clause of the expected result, each with what you actually observed. A clause you did not directly observe is 'not_checked', and then the verdict is not PASS. Dropdowns in the snapshot list their options - use those to verify option lists rather than trial-and-error selection.
 - You have a limited number of actions for this run - be efficient, don't repeat get_snapshot without having taken an action in between unless the page just changed.
 - After submitting a form, always take a fresh snapshot and check for an inline validation message (e.g. "should not exceed N characters", "already exists", "required") before deciding what to do next. If you see one, adapt the value you enter to satisfy it (e.g. shorten it, change it) - do not resubmit the exact same value again. If the same action fails validation twice in a row even after you've adapted the value, stop retrying it - call finish_test with FAIL or BLOCKED and quote the validation message in your notes, rather than repeating it for the rest of your available actions.
@@ -1674,6 +1927,34 @@ def execute_test_case(
             browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
             page = browser.new_page()
             page.set_default_timeout(ACTION_TIMEOUT_MS)
+            # 2026-09-27 (pending-deploy-checklist priority 14, TC-006/
+            # TC-015): a reference-field "lookup" popup (a genuine separate
+            # browser window/tab, e.g. window.open()-based classic
+            # ServiceNow list pickers) is invisible to every tool this
+            # harness exposes today - _visible_frames only ever walks
+            # page.frames of THIS page, never a sibling Page object, so a
+            # popup's contents can never appear in get_snapshot and nothing
+            # in it can ever be clicked. Before this fix that produced a
+            # confusing silent stall (the parent page genuinely doesn't
+            # change while a popup has focus) with no indication of the
+            # real cause. This does NOT add popup interaction support -
+            # that's real, separate feature work needing live validation
+            # this pass had no way to do safely - it only makes the
+            # existing unsupported case honestly diagnosable instead of a
+            # mystery timeout, so the model reports BLOCKED with the actual
+            # reason instead of grinding to the step limit. The popup is
+            # closed immediately after being logged, both because nothing
+            # can act on it anyway and so it can never accumulate/leak
+            # across a long-running test case.
+            popup_notices: list = []
+            # 2026-09-27 council review (Playwright specialist): page.on(
+            # "popup") is the correctly-scoped event for this - fires only
+            # for a page opened FROM this one (window.open()/target=_blank/
+            # ctrl-click), unlike context.on("page") which fires for any new
+            # page in the whole browser context (including ones unrelated
+            # to this test case, and remains correct even if a future change
+            # ever adds a second page/tab deliberately).
+            page.on("popup", lambda new_page: _record_popup_notice(new_page, popup_notices))
             try:
                 page.goto(env_url, timeout=NAV_TIMEOUT_MS, wait_until="domcontentloaded")
             except PlaywrightTimeoutError as e:
@@ -1761,6 +2042,28 @@ def execute_test_case(
                     "elements": elements_for_model,
                     "steps_remaining": step_limit - step_num - 1,
                 }
+                if popup_notices:
+                    # See _record_popup_notice's docstring above - a popup
+                    # window opened and was closed unread; surfaced here
+                    # (cheap, only when it actually happens) so the model can
+                    # give an honest BLOCKED reason instead of continuing to
+                    # probe a parent page that will never change.
+                    #
+                    # 2026-09-27 council review (correctness reviewer) found
+                    # a real false-BLOCKED bug in the first version: this
+                    # list was never cleared, so a popup that opened and was
+                    # resolved early in the run (e.g. an incidental help/PDF
+                    # tab unrelated to the test) kept echoing forward onto
+                    # every later snapshot for the rest of the test case,
+                    # which could make the model give up on a run that would
+                    # otherwise have PASSed. Consuming the list here (surface
+                    # once, then clear) makes this single-shot: it only ever
+                    # appears in the one snapshot immediately following the
+                    # action that opened it, exactly matching what the
+                    # system-prompt rule actually tells the model ("opened
+                    # by the last action").
+                    result_payload["unsupported_popup_opened"] = popup_notices[-1]
+                    popup_notices.clear()
                 if snapshot_frames:
                     # frame index -> URL, listed once (COMPACT_SNAPSHOT_ENCODING)
                     result_payload["frames"] = snapshot_frames
@@ -2133,22 +2436,54 @@ def execute_test_case(
                             timeout = inp.get("timeout_ms", 5000)
                             frames_to_check = _visible_frames(page)
                             per_frame_timeout = max(500, timeout // max(1, len(frames_to_check)))
+                            # 2026-09-25 TC-007 false-positive fix: a candidate
+                            # meant to confirm a POSITIVE outcome can still
+                            # exact-match text that only exists transiently
+                            # inside an open autocomplete/combobox dropdown
+                            # (see _TRANSIENT_OVERLAY_JS's docstring above and
+                            # claude/tc007-root-cause-false-confirmation-2026-
+                            # 09-25.md - this is exactly what happened: "No
+                            # record found" from ServiceNow's own Caller-field
+                            # typeahead was mistaken for a "record will be
+                            # auto-created" confirmation). Once a candidate
+                            # resolves, it is checked against
+                            # _TRANSIENT_OVERLAY_JS before being accepted; a
+                            # match inside a transient overlay is rejected and
+                            # the search continues (other candidates, other
+                            # frames) rather than stopping here. Fails open on
+                            # any error in the check itself - never blocks a
+                            # genuine match due to a bug in this safety layer.
                             found = False
                             matched_candidate = None
+                            overlay_rejections = 0
                             for frame in frames_to_check:
                                 for cand in candidates:
                                     try:
-                                        frame.get_by_text(cand, exact=False).first.wait_for(timeout=per_frame_timeout)
-                                        found = True
-                                        matched_candidate = cand
-                                        break
+                                        loc = frame.get_by_text(cand, exact=False).first
+                                        loc.wait_for(timeout=per_frame_timeout)
                                     except PlaywrightTimeoutError:
                                         continue
                                     except Exception:
                                         continue
+                                    try:
+                                        is_transient = loc.evaluate(_TRANSIENT_OVERLAY_JS)
+                                    except Exception:
+                                        is_transient = False
+                                    if is_transient:
+                                        overlay_rejections += 1
+                                        continue
+                                    found = True
+                                    matched_candidate = cand
+                                    break
                                 if found:
                                     break
                             result_payload = {"found": found}
+                            if overlay_rejections:
+                                # Audit trail only - never sent to the model,
+                                # costs zero extra tokens - lets a human
+                                # confirm the exclusion actually fired instead
+                                # of silently doing nothing.
+                                result_payload["overlay_rejections"] = overlay_rejections
                             fuzzy_match = None
                             if not found:
                                 # Zero-LLM-token fallback: recognizes a
