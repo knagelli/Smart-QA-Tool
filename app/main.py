@@ -2379,7 +2379,30 @@ async def execute_run(
     })
     # Run Control Center (2026-09-25): the one job registry cancel, queue-
     # visibility, and the live ETA all read from - see app/job_registry.py.
-    job_registry.REGISTRY.register(exec_id, access_code, len(selected_ids))
+    #
+    # 2026-09-27 council fix: register() now raises ValueError on an
+    # exec_id collision against a still-live job, instead of silently
+    # overwriting it (see job_registry.register's docstring - exec_id is a
+    # fresh uuid.uuid4().hex[:12] generated a few lines above, so this is a
+    # birthday-bound, effectively-never event at this app's scale, not
+    # something expected to fire in production). But this call site had no
+    # exception handling before that change, and by this point the
+    # execution allowance has already been reserved (reserve_execution,
+    # above) and the status file already written - letting a ValueError
+    # here propagate unhandled would turn an astronomically unlikely event
+    # into a bare 500 for the client AND leak that reservation forever
+    # (reconcile_execution, which trues it up, is only ever called from the
+    # background batch's own finally block, which would now never run).
+    # Caught here and unwound cleanly instead, exactly like every other
+    # abort path in this handler.
+    try:
+        job_registry.REGISTRY.register(exec_id, access_code, len(selected_ids))
+    except ValueError:
+        client_quotas.reconcile_execution(access_code, len(selected_ids), 0, exec_id=exec_id)
+        return err(
+            "A run with a conflicting internal ID is already in progress. Please try again.",
+            test_cases=data.get("test_scenarios"), application=application,
+        )
     _active_executions_by_code[access_code] = {
         "total": len(selected_ids),
         "status_url": f"/execute-status/{run_id}/{exec_id}?token={exec_token}",

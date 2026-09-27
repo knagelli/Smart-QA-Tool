@@ -79,12 +79,48 @@ class ExecutionJob:
 
 
 class JobRegistry:
+    """A single in-process registry. All state lives in this process's
+    memory (self._jobs, guarded by self._lock) with no shared external
+    store - if req2qa were ever deployed behind more than one uvicorn/
+    gunicorn worker process (it is not, today: one systemd service, one
+    process, per claude/render-to-ec2-cutover-complete-2026-09-23.md), each
+    worker would silently see and manage only the jobs registered through
+    it, splitting queue-position counts, ETA data, and cancel visibility
+    across workers with no error or warning. This is fine under the current
+    single-process deployment and deliberately not solved here (see the
+    module docstring's SCOPE NOTE on why on-disk rehydration was dropped) -
+    but a future move to multiple workers would need this registry (or the
+    fact of not needing it) revisited first."""
+
     def __init__(self):
         self._lock = threading.Lock()
         self._jobs: dict[str, ExecutionJob] = {}
 
     def register(self, exec_id: str, access_code: str, total: int) -> ExecutionJob:
+        """Raises ValueError if exec_id already names a job that hasn't
+        reached a terminal state yet, instead of silently overwriting it (the
+        original behavior). main.py's only caller generates exec_id as
+        uuid.uuid4().hex[:12] (48 bits of randomness) immediately before this
+        call, so a genuine collision against a still-live job is a
+        birthday-bound event needing on the order of 2^24 concurrent
+        executions to become likely - not a realistic risk at this app's
+        scale - but silently overwriting is still the wrong failure mode if
+        it ever did happen: the caller would lose visibility (queue
+        position, ETA, cancel) into the job that got clobbered, with no
+        error to explain why, which would be a much harder bug to diagnose
+        than a raised exception right at the point of registration. A
+        collision against an already-terminal (DONE/CANCELLED/ERROR) job
+        that simply hasn't been cleanup()'d yet is allowed through and
+        replaces the stale entry, matching this registry's existing
+        "terminal jobs don't occupy capacity" convention used elsewhere
+        (snapshot/queue_position already exclude them)."""
         with self._lock:
+            existing = self._jobs.get(exec_id)
+            if existing is not None and existing.state not in _TERMINAL:
+                raise ValueError(
+                    f"exec_id collision: {exec_id!r} is already registered "
+                    f"and not yet terminal (state={existing.state!r})"
+                )
             job = ExecutionJob(exec_id=exec_id, access_code=access_code, total=total)
             self._jobs[exec_id] = job
             return job
@@ -150,9 +186,17 @@ class JobRegistry:
         return per_step * remaining_steps_estimate
 
     def cleanup(self, exec_id: str) -> None:
-        """Drop a finished job's bookkeeping once its result page is served -
-        called from the same place _active_executions_by_code is cleared, so
-        this never grows unboundedly across a long-running process."""
+        """Drop a finished job's bookkeeping. Called from the `finally` block
+        of the background batch runner itself (main.py's
+        _run_execution_batch_impl, alongside where
+        _active_executions_by_code is cleared) the moment the job reaches a
+        terminal state (DONE/CANCELLED/ERROR) - NOT when the result page is
+        later served to the client, which is a separate, independent HTTP
+        request that may happen well afterward or not at all (e.g. the
+        client never reloads the status page). This still guarantees no
+        unbounded growth across a long-running process, since every
+        register() is paired with exactly one terminal transition and thus
+        exactly one cleanup() call regardless of what the client does."""
         with self._lock:
             self._jobs.pop(exec_id, None)
 
