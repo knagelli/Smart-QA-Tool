@@ -33,3 +33,25 @@ playwright==1.47.0
 # deploy for the fallback to actually do anything, so it is pinned here like
 # every other real dependency, not left as a "nice to have."
 rapidfuzz==3.9.7
+# 2026-09-27: requirement-text PII masking gateway (app/pii_masking.py, see
+# claude/pii-masking-and-ephemeral-containers-deep-research-2026-09-27.md).
+# Optional at runtime by design, exactly like rapidfuzz above -
+# pii_masking.py logs a loud one-time startup warning and falls back to its
+# regex-only layer (still real coverage: emails/phones/SSNs/credit cards)
+# if this is missing, rather than crashing the whole service. Adds
+# name/location/organization detection via a bundled spaCy NER model. MUST
+# be installed on every real deploy for that NER layer to do anything -
+# pinned here like every other real dependency, not left as a "nice to
+# have." en_core_web_sm itself is a separate model download (not a pip
+# package) - see the deploy note in claude/pii-masking-and-ephemeral-
+# containers-deep-research-2026-09-27.md for the one-time
+# `python -m spacy download en_core_web_sm` step this requires on EC2.
+# NOT independently version-verified against PyPI in this sandbox (no
+# network access here to confirm the current release) - pin the actual
+# latest stable version at install time rather than trusting this number,
+# e.g. `pip install presidio-analyzer presidio-anonymizer spacy` then
+# `pip freeze` to capture what was actually installed, and update this file
+# to match before committing.
+presidio-analyzer
+presidio-anonymizer
+spacy
