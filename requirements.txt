@@ -46,12 +46,11 @@ rapidfuzz==3.9.7
 # package) - see the deploy note in claude/pii-masking-and-ephemeral-
 # containers-deep-research-2026-09-27.md for the one-time
 # `python -m spacy download en_core_web_sm` step this requires on EC2.
-# NOT independently version-verified against PyPI in this sandbox (no
-# network access here to confirm the current release) - pin the actual
-# latest stable version at install time rather than trusting this number,
-# e.g. `pip install presidio-analyzer presidio-anonymizer spacy` then
-# `pip freeze` to capture what was actually installed, and update this file
-# to match before committing.
-presidio-analyzer
-presidio-anonymizer
-spacy
+# Pinned to the versions actually installed and confirmed working on EC2
+# on 2026-09-27 (`pip install` output, ap-southeast-2 instance) - not
+# independently re-verified against PyPI in this sandbox (no network
+# access here), but these are real, deployed, confirmed-good versions,
+# not a guess.
+presidio-analyzer==2.2.364
+presidio-anonymizer==2.2.364
+spacy==3.8.16
