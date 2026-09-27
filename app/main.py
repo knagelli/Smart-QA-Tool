@@ -345,6 +345,105 @@ async def _security_headers(request: Request, call_next):
 
 
 # --------------------------------------------------------------------------
+# Auto-stop idle tracking (2026-09-27) - see
+# claude/on-demand-ec2-auto-stop-implemented-2026-09-27.md for the full
+# design and the council/deep-research report it implements
+# (claude/on-demand-ec2-wake-architecture-deep-research-2026-09-27.md).
+# Kalyan's policy: stop the EC2 instance automatically when idle to save
+# cost, UNLESS there are already 3+ paying (tier 1/2) clients configured -
+# at that point the instance runs 24/7 unconditionally, since the
+# idle-stop/cold-start tradeoff stops being worth it once there's a real
+# customer base who could be inconvenienced by a 1-2 minute wake delay.
+#
+# This module only tracks the two SAFE-to-stop signals and exposes them -
+# it does not itself ever call ec2:StopInstances/StartInstances. That is
+# handled by an external Lambda (deliberately NOT run in-process - self-
+# stopping from inside the process about to be killed is inherently racy
+# on this single-process/systemd deployment) which polls
+# GET /internal/idle-status on a schedule and makes the actual stop
+# decision. See the deploy runbook for the Lambda code and EventBridge
+# schedule this endpoint is designed to be polled by.
+# --------------------------------------------------------------------------
+_last_request_at = time.time()
+
+# Paths that must NOT count as "activity" - otherwise the idle checker
+# polling its own status endpoint (or an uptime/health monitor) would look
+# like permanent traffic and the instance would never be judged idle.
+_IDLE_EXEMPT_PATH_PREFIXES = ("/internal/idle-status", "/health", "/healthz")
+
+
+@app.middleware("http")
+async def _track_last_request(request: Request, call_next):
+    if not request.url.path.startswith(_IDLE_EXEMPT_PATH_PREFIXES):
+        global _last_request_at
+        # Stamped BEFORE call_next so a request that errors, hangs, or is
+        # still in flight (e.g. a long-running /generate call) still counts
+        # as "activity happened here", matching this function's purpose:
+        # answering "has anyone touched this server recently", not "did the
+        # last response succeed."
+        _last_request_at = time.time()
+    return await call_next(request)
+
+
+@app.get("/internal/idle-status")
+async def internal_idle_status(request: Request):
+    """Polled externally (by the auto-stop Lambda, never by anything in
+    this process) to decide whether it's safe to stop this EC2 instance.
+    Requires the REQ2QA_INTERNAL_TOKEN shared secret (env var) as an
+    X-Internal-Token header - this endpoint reveals operational internals
+    (active job count, paying-client count) that shouldn't be public, and
+    unlike the admin UI there's no human login step to gate it with, so a
+    bearer token is the simplest thing that actually closes it off. Fails
+    CLOSED: a missing/unset REQ2QA_INTERNAL_TOKEN env var disables this
+    endpoint entirely (503) rather than leaving it open by accident.
+
+    active_jobs: count of non-terminal jobs from job_registry.py's
+    REGISTRY.snapshot() - QUEUED counts as active, matching the council
+    review's confirmation that QUEUED is correctly excluded from
+    job_registry._TERMINAL.
+
+    last_request_age_seconds: time since the last non-exempt request this
+    process has seen. Does NOT survive a restart (resets to 0 on process
+    start) - deliberately conservative: right after a deploy/restart, this
+    reads as "just used", so the checker won't immediately consider a
+    freshly-restarted instance idle before it's had a chance to see real
+    traffic again.
+
+    paying_client_count: client_quotas.count_paying_clients() - see that
+    function's docstring for exactly what counts.
+
+    safe_to_stop: the actual policy decision, computed here (not left to
+    the external Lambda to reimplement) so the policy lives in one place:
+    paying_client_count < 3 AND active_jobs == 0 AND
+    last_request_age_seconds >= REQ2QA_IDLE_QUIET_SECONDS (default 900s /
+    15 minutes - see the deep-research report's polling-cadence analysis
+    for why 15 minutes was chosen)."""
+    token = os.environ.get("REQ2QA_INTERNAL_TOKEN", "")
+    if not token:
+        raise HTTPException(status_code=503, detail="Internal status endpoint not configured.")
+    if request.headers.get("X-Internal-Token", "") != token:
+        raise HTTPException(status_code=401, detail="Unauthorized.")
+
+    active_jobs = len(job_registry.REGISTRY.snapshot())
+    last_request_age = max(0.0, time.time() - _last_request_at)
+    paying_client_count = client_quotas.count_paying_clients()
+    quiet_threshold = float(os.environ.get("REQ2QA_IDLE_QUIET_SECONDS", "900"))
+
+    safe_to_stop = (
+        paying_client_count < 3
+        and active_jobs == 0
+        and last_request_age >= quiet_threshold
+    )
+    return {
+        "active_jobs": active_jobs,
+        "last_request_age_seconds": round(last_request_age, 1),
+        "paying_client_count": paying_client_count,
+        "idle_quiet_threshold_seconds": quiet_threshold,
+        "safe_to_stop": safe_to_stop,
+    }
+
+
+# --------------------------------------------------------------------------
 # Access control - fails CLOSED, not open, on misconfiguration.
 # --------------------------------------------------------------------------
 def _load_access_codes() -> dict:

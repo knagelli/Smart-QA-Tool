@@ -134,6 +134,23 @@ def set_quota(
         return dict(data[access_code])
 
 
+def count_paying_clients() -> int:
+    """2026-09-27: how many paying (tier 1/2) access codes currently exist -
+    the input to the auto-stop policy in main.py's /internal/idle-status
+    (Kalyan's rule: keep the EC2 instance running 24/7 once there are 3+
+    paying clients, only auto-stop-when-idle below that). Every key in this
+    store is a real admin-configured client (fail-closed entitlement as of
+    2026-09-21 - see get_service_type's docstring - there is no more
+    "unconfigured code that still counts" case), so a plain count of keys
+    is the right measure; deliberately does NOT distinguish generation-only
+    vs execution-only vs both, or filter by subscribed_count/quota
+    exhaustion - a client who has used up their quota is still a paying
+    client for the purpose of "is it worth keeping the lights on," not a
+    departed one."""
+    with _lock:
+        return len(_load())
+
+
 def get_service_type(access_code: str) -> str | None:
     """What this access code is entitled to: 'generation', 'execution', or
     'both' - or None if no entitlement has ever been configured for it.

@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<!--
+  req2qa "warming up" holding page (2026-09-27).
+
+  Hosted on S3 (static website hosting) or CloudFront - see the deploy
+  runbook for exact steps. Route53 failover routing sends a client here
+  automatically when the primary EC2 instance's health check is failing
+  (which happens deliberately whenever the auto-stop feature has stopped
+  it, and also - honestly - if it's ever down for an unrelated reason;
+  this page can't tell the difference, and says so rather than pretending
+  it can).
+
+  Behavior: calls the wake Lambda once on load (idempotent - see
+  wake_lambda.py's docstring), then polls the REAL app's own health
+  endpoint every few seconds; the moment that succeeds, redirects there.
+  Never tries to silently proxy/replay the client's original request - no
+  credible production pattern for that was found in the deep-research
+  report this implements (claude/on-demand-ec2-wake-architecture-deep-
+  research-2026-09-27.md); this honest "here's what's happening, hang
+  tight" page is the recommended, buildable alternative.
+
+  REPLACE THE TWO PLACEHOLDERS BELOW before deploying:
+    WAKE_LAMBDA_URL - the API Gateway invoke URL for wake_lambda.py's route
+    APP_HOME_URL    - the real app's own homepage, e.g. https://req2qa.example.com/
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>req2qa - starting up</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100vh; margin: 0; padding: 24px; box-sizing: border-box;
+    background: #f7f7f5; color: #1a1a1a;
+  }
+  @media (prefers-color-scheme: dark) { body { background: #17171a; color: #e8e8e6; } }
+  .card { max-width: 420px; text-align: center; }
+  .spinner {
+    width: 36px; height: 36px; margin: 0 auto 20px;
+    border: 3px solid rgba(120,120,120,0.25); border-top-color: #6b6b6b;
+    border-radius: 50%; animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  h1 { font-size: 1.15rem; margin: 0 0 8px; }
+  p { font-size: 0.92rem; opacity: 0.75; line-height: 1.5; margin: 0; }
+  #detail { margin-top: 14px; font-size: 0.8rem; opacity: 0.55; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="spinner" aria-hidden="true"></div>
+    <h1>Starting req2qa&hellip;</h1>
+    <p>The service was idle and is waking back up. This usually takes a minute or two - this page will move on automatically once it's ready.</p>
+    <div id="detail">Requesting startup&hellip;</div>
+  </div>
+
+<script>
+(function () {
+  var WAKE_LAMBDA_URL = "REPLACE_WITH_WAKE_LAMBDA_INVOKE_URL";
+  var APP_HOME_URL = "REPLACE_WITH_APP_HOME_URL";
+  var detail = document.getElementById("detail");
+  var pollHandle = null;
+  var wakeAttempted = false;
+
+  function setDetail(text) { detail.textContent = text; }
+
+  function triggerWake() {
+    if (wakeAttempted) return;
+    wakeAttempted = true;
+    fetch(WAKE_LAMBDA_URL, { method: "POST" })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        setDetail("Instance state: " + (data.instance_state || "unknown") + " - checking back shortly.");
+      })
+      .catch(function () {
+        // Fail open on the wake call itself - the poll loop below will
+        // keep checking the real app regardless of whether this specific
+        // call succeeded, since Route53 failback will pick it up the
+        // moment it's healthy either way.
+        setDetail("Could not reach the startup trigger - still checking for the app to come back.");
+      });
+  }
+
+  function pollForRealApp() {
+    // A plain, cache-busted fetch against the app's own homepage. Once
+    // Route53 failback has switched traffic back (health check passing
+    // again), this succeeds and we redirect - no need to talk to the
+    // wake Lambda or API Gateway for this part.
+    fetch(APP_HOME_URL + "?_wake_check=" + Date.now(), { mode: "no-cors", cache: "no-store" })
+      .then(function () {
+        setDetail("req2qa is back - redirecting...");
+        window.location.href = APP_HOME_URL;
+      })
+      .catch(function () {
+        // Still down/still failing over - keep waiting, no error shown to
+        // the user since this is the expected state for most of the wait.
+      });
+  }
+
+  triggerWake();
+  pollForRealApp();
+  pollHandle = window.setInterval(pollForRealApp, 8000);
+})();
+</script>
+</body>
+</html>
