@@ -10,6 +10,7 @@ import os
 import re
 
 from . import ai_client
+from . import pii_masking
 
 logger = logging.getLogger(__name__)
 
@@ -221,9 +222,14 @@ def run_qa_analysis(application: str, requirements_text: str, api_key: str, max_
                      process_context: dict | None = None) -> dict:
     client = ai_client.get_client(api_key)
 
+    # 2026-09-27 PII masking gateway (see app/pii_masking.py's module
+    # docstring for the full design/scope rationale). Only the text going
+    # to the model is masked - the original requirements_text is left
+    # untouched for anything else this function's caller does with it.
+    masked_requirements_text, _pii_count = pii_masking.mask_text(requirements_text.strip()[:120000])
     prompt = PROMPT_TEMPLATE.format(
         application=application.strip(),
-        requirements_text=requirements_text.strip()[:120000],  # guard against runaway input
+        requirements_text=masked_requirements_text,  # guard against runaway input applied above, before masking
     )
     if process_context:
         prompt += _build_process_context_block(process_context)
@@ -405,11 +411,21 @@ def run_qa_analysis_custom(application: str, brief_text: str, flow: dict, requir
             f"{element_hints.strip()[:4000]}\n"
         )
 
+    # 2026-09-27 PII masking gateway - brief_text and requirements_text are
+    # free-form client-authored text (the same category the deep-research
+    # report scoped this feature to); flow_json is a structured, already-
+    # human-confirmed dict of step_ids/labels the LLM must treat as fixed
+    # identifiers (see this function's own docstring) - masking it risks
+    # corrupting exactly the step_id cross-references the prompt asks
+    # Claude to preserve verbatim, for a data shape that's already been
+    # through a human review-and-confirm screen. Left unmasked deliberately.
+    masked_brief_text, _ = pii_masking.mask_text(brief_text.strip()[:40000])
+    masked_requirements_text, _ = pii_masking.mask_text(requirements_text.strip()[:80000])
     prompt = CUSTOM_PROMPT_TEMPLATE.format(
         application=application.strip(),
-        brief_text=brief_text.strip()[:40000],
+        brief_text=masked_brief_text,
         flow_json=json.dumps(flow, indent=2)[:40000],
-        requirements_text=requirements_text.strip()[:80000],
+        requirements_text=masked_requirements_text,
         hints_block=hints_block,
     )
 
@@ -491,9 +507,10 @@ def structure_existing_test_cases(application: str, raw_text: str, api_key: str)
     path this sits behind."""
     client = ai_client.get_client(api_key)
 
+    masked_raw_text, _ = pii_masking.mask_text(raw_text.strip()[:100000])
     prompt = IMPORT_PROMPT_TEMPLATE.format(
         application=application.strip(),
-        raw_text=raw_text.strip()[:100000],
+        raw_text=masked_raw_text,
     )
 
     resp = client.messages.create(
@@ -552,9 +569,18 @@ def match_requirements_to_test_cases(application: str, requirements_text: str, t
         {"tc_id": tc.get("tc_id", ""), "title": tc.get("title", ""), "steps": tc.get("steps", "")[:500]}
         for tc in test_cases
     ]
+    # 2026-09-27 PII masking gateway - scoped to the requirements document
+    # only for this first slice, matching the other 4 call sites. The
+    # client's own already-written test-case titles/steps (tc_summary) are
+    # left unmasked here deliberately: broadening scope to every free-text
+    # field in this file in one pass raises the over-masking/regression
+    # surface for no confirmed benefit yet - see the deep-research report's
+    # "smallest safe first step" framing. Revisit if a real PII leak is
+    # ever traced back to this specific field.
+    masked_requirements_text, _ = pii_masking.mask_text(requirements_text.strip()[:100000])
     prompt = TRACEABILITY_PROMPT_TEMPLATE.format(
         application=application.strip(),
-        requirements_text=requirements_text.strip()[:100000],
+        requirements_text=masked_requirements_text,
         test_cases_json=json.dumps(tc_summary),
     )
 
@@ -665,15 +691,27 @@ def analyze_requirements_impact(
     inferring semantic impact after the fact, not verifying a ground truth."""
     client = ai_client.get_client(api_key)
 
-    diff_text = line_diff(old_text, new_text)
+    # 2026-09-27 PII masking gateway - old_text and new_text are masked
+    # TOGETHER under one shared token map (mask_texts, not two separate
+    # mask_text calls) so the same real value occurring in both versions
+    # gets the same placeholder in both - otherwise a genuinely unchanged
+    # value could look "modified" to the model purely because it got a
+    # different token number in each text, which would corrupt exactly the
+    # unchanged-vs-modified distinction this function exists to draw. The
+    # diff is computed from the MASKED texts (not the raw ones) so the
+    # line-level diff handed to the model never contains raw PII either.
+    (masked_old_text, masked_new_text), _ = pii_masking.mask_texts(
+        old_text.strip()[:60000], new_text.strip()[:60000],
+    )
+    diff_text = line_diff(masked_old_text, masked_new_text)
     tc_summary = [
         {"tc_id": tc.get("tc_id", ""), "req_id": tc.get("req_id", ""), "title": tc.get("title", "")}
         for tc in old_test_cases
     ]
     prompt = IMPACT_PROMPT_TEMPLATE.format(
         application=application.strip(),
-        old_text=old_text.strip()[:60000],
-        new_text=new_text.strip()[:60000],
+        old_text=masked_old_text,
+        new_text=masked_new_text,
         unified_diff=diff_text or "(no line-level differences detected)",
         old_test_cases_json=json.dumps(tc_summary),
     )
